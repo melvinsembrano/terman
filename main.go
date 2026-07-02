@@ -74,6 +74,21 @@ func (s *stringSlice) Set(v string) error {
 	return nil
 }
 
+// parseVarOverrides turns "k=v" pairs (as passed via repeated --var flags)
+// into a map. Values may themselves contain "=" (only the first one splits
+// the key from the value). Returns an error if any pair lacks a "=".
+func parseVarOverrides(pairs []string) (map[string]string, error) {
+	overrides := map[string]string{}
+	for _, kv := range pairs {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid --var %q, expected k=v", kv)
+		}
+		overrides[k] = v
+	}
+	return overrides, nil
+}
+
 func cmdRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: terman run <name> [--env <name>] [--var k=v] [-i]")
@@ -110,13 +125,9 @@ func cmdRun(args []string) error {
 		envVars = env.Vars
 	}
 
-	overrides := map[string]string{}
-	for _, kv := range varOverrides {
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
-			return fmt.Errorf("invalid --var %q, expected k=v", kv)
-		}
-		overrides[k] = v
+	overrides, err := parseVarOverrides(varOverrides)
+	if err != nil {
+		return err
 	}
 
 	resolved := vars.Merge(envVars, overrides)

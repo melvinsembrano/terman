@@ -1,0 +1,257 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/melvinsembrano/terman/internal/model"
+	"github.com/melvinsembrano/terman/internal/store"
+)
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns
+// everything written to it.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	return string(out)
+}
+
+func TestStringSliceSetAppends(t *testing.T) {
+	var s stringSlice
+	if err := s.Set("a=1"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.Set("b=2"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if len(s) != 2 || s[0] != "a=1" || s[1] != "b=2" {
+		t.Errorf("stringSlice = %v, want [a=1 b=2]", s)
+	}
+}
+
+func TestStringSliceString(t *testing.T) {
+	s := stringSlice{"a=1", "b=2"}
+	if got := s.String(); got != "a=1,b=2" {
+		t.Errorf("String() = %q, want %q", got, "a=1,b=2")
+	}
+}
+
+func TestParseVarOverrides(t *testing.T) {
+	got, err := parseVarOverrides([]string{"msg=hi", "base_url=https://example.com"})
+	if err != nil {
+		t.Fatalf("parseVarOverrides: %v", err)
+	}
+	if got["msg"] != "hi" || got["base_url"] != "https://example.com" {
+		t.Errorf("parseVarOverrides = %v", got)
+	}
+}
+
+func TestParseVarOverridesValueContainsEquals(t *testing.T) {
+	got, err := parseVarOverrides([]string{"token=a=b=c"})
+	if err != nil {
+		t.Fatalf("parseVarOverrides: %v", err)
+	}
+	if got["token"] != "a=b=c" {
+		t.Errorf(`parseVarOverrides["token"] = %q, want %q`, got["token"], "a=b=c")
+	}
+}
+
+func TestParseVarOverridesInvalid(t *testing.T) {
+	if _, err := parseVarOverrides([]string{"badformat"}); err == nil {
+		t.Error("expected error for pair without '='")
+	}
+}
+
+func TestParseVarOverridesEmpty(t *testing.T) {
+	got, err := parseVarOverrides(nil)
+	if err != nil {
+		t.Fatalf("parseVarOverrides: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("parseVarOverrides(nil) = %v, want empty map", got)
+	}
+}
+
+func TestCmdListNoRequests(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	out := captureStdout(t, func() {
+		if err := cmdList(nil); err != nil {
+			t.Fatalf("cmdList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "no saved requests") {
+		t.Errorf("cmdList output = %q, want to contain %q", out, "no saved requests")
+	}
+}
+
+func TestCmdListShowsSavedRequests(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Get Widget", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdList(nil); err != nil {
+			t.Fatalf("cmdList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Get Widget") || !strings.Contains(out, "GET") || !strings.Contains(out, "https://example.com") {
+		t.Errorf("cmdList output = %q, missing expected fields", out)
+	}
+}
+
+func TestCmdEnvListMarksActive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev"}); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SaveEnv(model.Environment{Name: "prod"}); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SetActiveEnv("prod"); err != nil {
+		t.Fatalf("SetActiveEnv: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdEnv([]string{"list"}); err != nil {
+			t.Fatalf("cmdEnv: %v", err)
+		}
+	})
+	if !strings.Contains(out, "* prod") {
+		t.Errorf("cmdEnv list output = %q, want to contain %q", out, "* prod")
+	}
+	if !strings.Contains(out, "  dev") {
+		t.Errorf("cmdEnv list output = %q, want to contain unmarked %q", out, "dev")
+	}
+}
+
+func TestCmdEnvUse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "staging"}); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"use", "staging"}); err != nil {
+		t.Fatalf("cmdEnv use: %v", err)
+	}
+	active, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if active != "staging" {
+		t.Errorf("active env = %q, want %q", active, "staging")
+	}
+}
+
+func TestCmdEnvUseUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"use", "nope"}); err == nil {
+		t.Error("expected error using an unknown environment")
+	}
+}
+
+func TestCmdEnvMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv(nil); err == nil {
+		t.Error("expected error for cmdEnv with no args")
+	}
+	if err := cmdEnv([]string{"use"}); err == nil {
+		t.Error("expected error for cmdEnv use with no name")
+	}
+	if err := cmdEnv([]string{"bogus"}); err == nil {
+		t.Error("expected error for unknown env subcommand")
+	}
+}
+
+func TestCmdRunMissingArgs(t *testing.T) {
+	if err := cmdRun(nil); err == nil {
+		t.Error("expected error for cmdRun with no args")
+	}
+}
+
+func TestCmdRunUnknownRequest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdRun([]string{"nope"}); err == nil {
+		t.Error("expected error for an unknown saved request")
+	}
+}
+
+func TestCmdRunInvalidVarFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	if err := cmdRun([]string{"Req", "--var", "badformat"}); err == nil {
+		t.Error("expected error for a malformed --var flag")
+	}
+}
+
+func TestCmdRunUnknownEnvFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	if err := cmdRun([]string{"Req", "--env", "nope"}); err == nil {
+		t.Error("expected error for an unknown --env")
+	}
+}
+
+// TestCmdRunSuccess exercises the full happy path (env resolution + var
+// override + HTTP call) without hitting the os.Exit(1) branch, which would
+// kill the test process. That branch is only reached on non-2xx responses.
+func TestCmdRunSuccess(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("pong"))
+	}))
+	defer srv.Close()
+
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"base_url": srv.URL}}); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SaveRequest(model.Request{
+		Name:   "Ping",
+		Method: "GET",
+		URL:    "{{base_url}}/ping?msg={{msg}}",
+	}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdRun([]string{"Ping", "--env", "dev", "--var", "msg=hi"}); err != nil {
+			t.Fatalf("cmdRun: %v", err)
+		}
+	})
+
+	if gotQuery != "msg=hi" {
+		t.Errorf("server received query = %q, want %q", gotQuery, "msg=hi")
+	}
+	if !strings.Contains(out, "200") || !strings.Contains(out, "pong") {
+		t.Errorf("cmdRun output = %q, want to contain status 200 and body", out)
+	}
+}

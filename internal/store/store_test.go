@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/melvinsembrano/terman/internal/model"
@@ -92,5 +93,147 @@ func TestActiveEnv(t *testing.T) {
 	}
 	if active != "dev" {
 		t.Errorf("GetActiveEnv = %q, want %q", active, "dev")
+	}
+}
+
+func TestEnvSaveLoadDelete(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	env := model.Environment{Name: "Dev", Vars: map[string]string{"base_url": "https://example.com"}}
+	if err := SaveEnv(env); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	got, err := LoadEnv("dev") // case-insensitive
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if got.Vars["base_url"] != env.Vars["base_url"] {
+		t.Errorf("LoadEnv Vars[base_url] = %q, want %q", got.Vars["base_url"], env.Vars["base_url"])
+	}
+
+	if err := DeleteEnv("Dev"); err != nil {
+		t.Fatalf("DeleteEnv: %v", err)
+	}
+	if _, err := LoadEnv("Dev"); err == nil {
+		t.Errorf("expected env to be deleted")
+	}
+}
+
+func TestLoadEnvUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if _, err := LoadEnv("nope"); err == nil {
+		t.Errorf("expected error for unknown environment")
+	}
+}
+
+func TestLoadRequestUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if _, err := LoadRequest("nope"); err == nil {
+		t.Errorf("expected error for unknown request")
+	}
+}
+
+func TestDeleteRequestUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := DeleteRequest("nope"); err == nil {
+		t.Errorf("expected error deleting unknown request")
+	}
+}
+
+func TestLoadRequestsEmptyDirReturnsNoError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	reqs, err := LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	if len(reqs) != 0 {
+		t.Errorf("expected 0 requests, got %d", len(reqs))
+	}
+}
+
+func TestLoadRequestsSortedCaseInsensitive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, name := range []string{"banana", "Apple", "cherry"} {
+		if err := SaveRequest(model.Request{Name: name, Method: "GET", URL: "https://example.com"}, ""); err != nil {
+			t.Fatalf("SaveRequest(%q): %v", name, err)
+		}
+	}
+
+	reqs, err := LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	got := make([]string, len(reqs))
+	for i, r := range reqs {
+		got[i] = r.Name
+	}
+	want := []string{"Apple", "banana", "cherry"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("LoadRequests()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLoadEnvsSortedCaseInsensitive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, name := range []string{"staging", "Dev", "prod"} {
+		if err := SaveEnv(model.Environment{Name: name}); err != nil {
+			t.Fatalf("SaveEnv(%q): %v", name, err)
+		}
+	}
+
+	envs, err := LoadEnvs()
+	if err != nil {
+		t.Fatalf("LoadEnvs: %v", err)
+	}
+	got := make([]string, len(envs))
+	for i, e := range envs {
+		got[i] = e.Name
+	}
+	want := []string{"Dev", "prod", "staging"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("LoadEnvs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBaseDirHonorsXDGConfigHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	dir, err := BaseDir()
+	if err != nil {
+		t.Fatalf("BaseDir: %v", err)
+	}
+	want := filepath.Join(tmp, "terman")
+	if dir != want {
+		t.Errorf("BaseDir() = %q, want %q", dir, want)
+	}
+}
+
+func TestBaseDirFallsBackToHomeConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	dir, err := BaseDir()
+	if err != nil {
+		t.Fatalf("BaseDir: %v", err)
+	}
+	if !strings.HasSuffix(dir, filepath.Join(".config", "terman")) {
+		t.Errorf("BaseDir() = %q, want suffix %q", dir, filepath.Join(".config", "terman"))
 	}
 }

@@ -50,6 +50,13 @@ func (s *responseScreen) showRunning(name string) {
 
 func (s *responseScreen) showResult(name string, resp httpx.Response) {
 	s.title = name
+	s.vp.SetContent(formatResponse(resp))
+	s.vp.GotoTop()
+}
+
+// formatResponse renders resp as the viewport body: a status/duration line,
+// a blank line, the response headers (if any), and the body.
+func formatResponse(resp httpx.Response) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  (%s)\n\n", resp.Status, resp.Duration.Round(1_000_000))
 	if h := resp.HeadersString(); h != "" {
@@ -57,8 +64,7 @@ func (s *responseScreen) showResult(name string, resp httpx.Response) {
 		b.WriteString("\n")
 	}
 	b.WriteString(resp.Body)
-	s.vp.SetContent(b.String())
-	s.vp.GotoTop()
+	return b.String()
 }
 
 func (s *responseScreen) showError(name string, err error) {
