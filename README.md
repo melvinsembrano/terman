@@ -1,7 +1,27 @@
-# terman
+# terman — Terminal API Client
 
-A terminal, simplified Postman: a TUI for building and saving HTTP requests,
-plus a CLI for running saved requests directly (e.g. from scripts).
+terman is a Terminal API Client — the parts of Postman or Insomnia you
+actually reach for, rebuilt as a fast, keyboard-driven tool that never
+leaves your terminal. Save a request once, organize the variables it needs
+into named environments, and run it again in a second — interactively in
+the TUI, or headlessly from the CLI when you're scripting, debugging over
+SSH, or wiring a smoke test into CI.
+
+Everything terman manages is a plain YAML file on disk (one per request,
+one per environment) under `~/.config/terman` — no account, no cloud sync,
+nothing to install beyond the binary. That also means your requests and
+environments are just files: diff them, put them in git alongside the
+project they belong to, or edit them by hand when that's faster than the
+TUI.
+
+Environments carry the `{{variables}}` your requests reference (base URLs,
+tokens, IDs), and can be built up manually, imported from a `.env` file, or
+loaded for a single session/run without ever touching disk — so you can
+try a value out without polluting a saved environment.
+
+- Build and save requests (method, URL, headers, body) without leaving the terminal
+- Organize variables into environments — persisted, or loaded session-only from a `.env` file
+- Run any saved request straight from the CLI (`terman run <name>`) for scripting and CI
 
 ## Install / build
 
@@ -174,3 +194,7 @@ vars:
 
 Since these are plain files, you can hand-edit, version-control, or share
 them directly.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

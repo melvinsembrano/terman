@@ -4,9 +4,10 @@ Guidance for coding agents (and humans) working in this repository.
 
 ## Project overview
 
-`terman` is a terminal, simplified Postman: a Bubble Tea TUI for building
-and saving HTTP requests, plus a CLI for running saved requests directly
-(e.g. from scripts). Module path: `github.com/melvinsembrano/terman`. Go
+`terman` is a Terminal API Client: a Bubble Tea TUI and CLI for building,
+saving, and organizing HTTP requests and the environments that parameterize
+them — then running them interactively or straight from the command line
+for scripting and CI. Module path: `github.com/melvinsembrano/terman`. Go
 version: **1.19** (see "Pinned dependency versions" below before upgrading).
 
 ## Build & test commands

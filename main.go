@@ -1,5 +1,7 @@
-// Command terman is a terminal, simplified Postman: a TUI for building and
-// saving HTTP requests, and a CLI for running saved requests directly.
+// Command terman is a Terminal API Client: a TUI and CLI for building,
+// saving, and organizing HTTP requests and the environments that
+// parameterize them, then running them interactively or straight from the
+// command line for scripting and CI.
 package main
 
 import (
@@ -51,7 +53,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `terman - a terminal, simplified Postman
+	fmt.Fprint(os.Stderr, `terman - Terminal API Client
 
 Usage:
   terman                                Launch the TUI
