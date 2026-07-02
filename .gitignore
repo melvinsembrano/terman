@@ -1,0 +1,28 @@
+# Binaries
+/terman
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.txt
+
+# Go build/vendor artifacts
+/vendor/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# terman's own local config/data (if run from within the repo)
+.config/terman/
+
+# OS/editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
