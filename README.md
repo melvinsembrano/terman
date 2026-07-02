@@ -52,8 +52,9 @@ Press `v` from the request list to open the environment manager:
 
 | Key       | Action                          |
 |-----------|-----------------------------------|
-| `enter`/`e` | edit the selected environment  |
+| `enter`/`e` | edit the selected environment (persisted environments only) |
 | `n`       | new environment                  |
+| `L`       | load a **session-only** environment (see below) |
 | `d`       | delete the selected environment  |
 | `u`       | set the selected environment active |
 | `esc`/`q` | back to the request list         |
@@ -65,13 +66,24 @@ Press `v` from the request list to open the environment manager:
 | `tab`           | move between the name field and variable rows |
 | `↑`/`↓`         | select a variable row               |
 | `a`             | add a variable                      |
+| `i`             | import variables from a `.env` file (merges into the rows above) |
 | `enter`         | edit the selected variable           |
 | `d`             | delete the selected variable          |
 | `ctrl+s`        | save                                  |
-| `esc`           | cancel (or close the row editor, if open) |
+| `esc`           | cancel (or close whichever modal is open, if any) |
 
 Deleting or renaming the currently active environment resets the active
 environment to "none".
+
+### Session-only environments
+
+Pressing `L` on the environment list opens the same editor, but saving
+(`ctrl+s`) never writes to disk: the environment lives only in the running
+TUI's memory, is marked `(session)` in the list, is set active immediately,
+and disappears the moment you quit. Use `i` inside it to load variables
+straight from a `.env` file. This is the TUI equivalent of the CLI's
+`run --env-file` (below) — a way to try out variables without creating a
+permanent saved environment.
 
 ## CLI
 
@@ -82,6 +94,7 @@ terman run <name> [flags]            # run a saved request
 terman env list                      # list saved environments (* marks active)
 terman env show <name>               # print an environment's variables
 terman env set <name> <k=v>...       # create/update variables (repeatable)
+terman env import <file> <name>      # merge a .env file's variables into an environment
 terman env unset <name> <key>...     # remove variables
 terman env delete <name>             # delete an environment
 terman env use <name>                # set the active environment
@@ -90,6 +103,8 @@ terman env use <name>                # set the active environment
 `run` flags:
 
 - `--env <name>` — use this environment instead of the active one
+- `--env-file <path>` — load extra variables from a `.env` file, just for this
+  run (not saved anywhere — see "Loading `.env` files" below)
 - `--var k=v` — override/add a variable (repeatable)
 - `-i` — also print response headers
 
@@ -106,6 +121,24 @@ Exit code is non-zero if the request errors or the response status is not
 
 Deleting the currently active environment (`env delete`) resets the active
 environment to "none".
+
+### Loading `.env` files
+
+Two ways to bring in variables from a dotenv-style file (`.env`,
+`.env.local`, `.env.production`, ...):
+
+- **Persisted import** — `terman env import <file> <name>` parses the file
+  and **merges** its variables into the named environment (creating it if
+  needed), same upsert behavior as `env set`.
+- **Session-only, CLI** — `terman run <name> --env-file <path>` overlays the
+  file's variables on top of the active/`--env` environment for that single
+  run only. Nothing is written to disk. Precedence (lowest to highest):
+  active/`--env` environment → `--env-file` → `--var`.
+- **Session-only, TUI** — see "Session-only environments" above.
+
+`.env` file format: `KEY=VALUE` per line, blank lines and `#` comments
+ignored, an optional `export ` prefix, and values may be single- or
+double-quoted (double-quoted values support `\n`, `\t`, `\"`, `\\` escapes).
 
 ## Storage
 

@@ -38,6 +38,11 @@ type appModel struct {
 
 	activeEnv string
 	envs      []model.Environment
+
+	// sessionEnvs marks (lower-cased) names in envs that are in-memory
+	// only — loaded via the env list's "L" key, never persisted to disk,
+	// and gone when the program exits.
+	sessionEnvs map[string]bool
 }
 
 // Run starts the Bubble Tea program and blocks until the user quits.
@@ -63,10 +68,6 @@ func newAppModel() (appModel, error) {
 	if err != nil {
 		return appModel{}, err
 	}
-	envLst, err := newEnvListScreen(active)
-	if err != nil {
-		return appModel{}, err
-	}
 	return appModel{
 		screen:    screenList,
 		activeEnv: active,
@@ -74,7 +75,7 @@ func newAppModel() (appModel, error) {
 		list:      lst,
 		editor:    newEditorScreen(),
 		response:  newResponseScreen(),
-		envList:   envLst,
+		envList:   newEnvListScreen(envs, active, nil),
 		envEditor: newEnvEditorScreen(),
 	}, nil
 }
@@ -141,7 +142,8 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleActiveEnv()
 			return m, nil
 		case "v":
-			_ = m.envList.refresh(m.activeEnv)
+			_ = m.reloadEnvs()
+			m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			m.screen = screenEnvList
 			return m, nil
 		case "enter":
@@ -199,24 +201,35 @@ func (m appModel) updateEnvList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.envEditor.loadNew()
 			m.screen = screenEnvEditor
 			return m, nil
+		case "L":
+			m.envEditor.loadNew()
+			m.envEditor.sessionOnly = true
+			m.screen = screenEnvEditor
+			return m, nil
 		case "e", "enter":
-			if env, ok := m.envList.selected(); ok {
+			if env, ok := m.envList.selected(); ok && !m.isSessionEnv(env.Name) {
 				m.envEditor.loadEnvironment(env)
 				m.screen = screenEnvEditor
 			}
 			return m, nil
 		case "d":
 			if env, ok := m.envList.selected(); ok {
-				_ = store.DeleteEnv(env.Name)
-				_ = m.reloadEnvs()
-				_ = m.envList.refresh(m.activeEnv)
+				if m.isSessionEnv(env.Name) {
+					m.removeSessionEnv(env.Name)
+				} else {
+					_ = store.DeleteEnv(env.Name)
+					_ = m.reloadEnvs()
+				}
+				m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			}
 			return m, nil
 		case "u":
 			if env, ok := m.envList.selected(); ok {
 				m.activeEnv = env.Name
-				_ = store.SetActiveEnv(env.Name)
-				_ = m.envList.refresh(m.activeEnv)
+				if !m.isSessionEnv(env.Name) {
+					_ = store.SetActiveEnv(env.Name)
+				}
+				m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			}
 			return m, nil
 		}
@@ -230,19 +243,26 @@ func (m appModel) updateEnvEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			if !m.envEditor.editing {
+			if !m.envEditor.editing && !m.envEditor.importing {
 				m.envEditor.err = ""
 				m.screen = screenEnvList
 				return m, nil
 			}
 		case "ctrl+s":
-			if m.envEditor.editing {
-				// Block saving while the row-edit modal is open.
+			if m.envEditor.editing || m.envEditor.importing {
+				// Block saving while a modal (row edit or file import) is open.
 				return m, nil
 			}
 			env := m.envEditor.toEnvironment()
 			if env.Name == "" {
 				m.envEditor.err = "name is required"
+				return m, nil
+			}
+			if m.envEditor.sessionOnly {
+				m.addSessionEnv(env)
+				m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
+				m.envEditor.err = ""
+				m.screen = screenEnvList
 				return m, nil
 			}
 			if err := store.SaveEnv(env, m.envEditor.prevName); err != nil {
@@ -253,10 +273,7 @@ func (m appModel) updateEnvEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.envEditor.err = err.Error()
 				return m, nil
 			}
-			if err := m.envList.refresh(m.activeEnv); err != nil {
-				m.envEditor.err = err.Error()
-				return m, nil
-			}
+			m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			m.envEditor.err = ""
 			m.screen = screenEnvList
 			return m, nil
@@ -302,29 +319,102 @@ func (m *appModel) cycleActiveEnv() {
 		}
 	}
 	m.activeEnv = names[(idx+1)%len(names)]
+	if m.isSessionEnv(m.activeEnv) {
+		return // ephemeral; never persist a session env as the active one
+	}
 	_ = store.SetActiveEnv(m.activeEnv)
 }
 
-// reloadEnvs re-reads the saved environments from disk. If the currently
-// active environment no longer exists (e.g. it was just deleted or renamed),
-// the active environment is cleared and persisted as "".
+// reloadEnvs re-reads the saved environments from disk, then re-appends any
+// session-only environments that aren't shadowed by a persisted one of the
+// same name (if a persisted env now shares the name, it wins and the
+// session marker is dropped). If the currently active environment no
+// longer exists anywhere, the active environment is cleared and (for a
+// persisted active env) that clearing is itself persisted as "".
 func (m *appModel) reloadEnvs() error {
-	envs, err := store.LoadEnvs()
+	persisted, err := store.LoadEnvs()
 	if err != nil {
 		return err
 	}
-	m.envs = envs
+
+	havePersisted := map[string]bool{}
+	for _, e := range persisted {
+		havePersisted[strings.ToLower(e.Name)] = true
+	}
+
+	wasSessionActive := m.isSessionEnv(m.activeEnv)
+
+	merged := persisted
+	for _, e := range m.envs {
+		lower := strings.ToLower(e.Name)
+		if !m.sessionEnvs[lower] {
+			continue
+		}
+		if havePersisted[lower] {
+			delete(m.sessionEnvs, lower)
+			continue
+		}
+		merged = append(merged, e)
+	}
+	m.envs = merged
 
 	if m.activeEnv == "" {
 		return nil
 	}
-	for _, e := range envs {
+	for _, e := range merged {
 		if strings.EqualFold(e.Name, m.activeEnv) {
 			return nil
 		}
 	}
 	m.activeEnv = ""
+	if wasSessionActive {
+		return nil // was never persisted; nothing to clear on disk
+	}
 	return store.SetActiveEnv("")
+}
+
+// isSessionEnv reports whether name refers to an in-memory-only
+// environment.
+func (m appModel) isSessionEnv(name string) bool {
+	return m.sessionEnvs[strings.ToLower(name)]
+}
+
+// addSessionEnv upserts env into m.envs as a session-only environment
+// (never written to disk) and makes it the active environment.
+func (m *appModel) addSessionEnv(env model.Environment) {
+	replaced := false
+	for i, e := range m.envs {
+		if strings.EqualFold(e.Name, env.Name) {
+			m.envs[i] = env
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		m.envs = append(m.envs, env)
+	}
+	if m.sessionEnvs == nil {
+		m.sessionEnvs = map[string]bool{}
+	}
+	m.sessionEnvs[strings.ToLower(env.Name)] = true
+	m.activeEnv = env.Name
+}
+
+// removeSessionEnv drops a session-only environment from memory. If it was
+// active, the active environment is cleared in memory only (never
+// persisted, since it was never saved to disk in the first place).
+func (m *appModel) removeSessionEnv(name string) {
+	lower := strings.ToLower(name)
+	delete(m.sessionEnvs, lower)
+	for i, e := range m.envs {
+		if strings.EqualFold(e.Name, name) {
+			m.envs = append(m.envs[:i], m.envs[i+1:]...)
+			break
+		}
+	}
+	if strings.EqualFold(m.activeEnv, name) {
+		m.activeEnv = ""
+	}
 }
 
 func (m appModel) activeEnvVars() map[string]string {

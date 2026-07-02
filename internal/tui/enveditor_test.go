@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/melvinsembrano/terman/internal/model"
@@ -151,5 +153,117 @@ func TestEnvEditorLoadNewResetsForm(t *testing.T) {
 	}
 	if len(s.pairs) != 0 {
 		t.Errorf("pairs after loadNew = %v, want empty", s.pairs)
+	}
+}
+
+func writeEnvFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+func TestEnvEditorImportAddsNewKeys(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.name.SetValue("dev")
+	path := writeEnvFile(t, "BASE_URL=https://example.com\nTOKEN=abc\n")
+
+	s.startImport()
+	if !s.importing {
+		t.Fatalf("expected importing=true after startImport")
+	}
+	s.pathInput.SetValue(path)
+	s.commitImport()
+
+	if s.importing {
+		t.Errorf("expected modal closed after commitImport")
+	}
+	if s.importErr != "" {
+		t.Errorf("importErr = %q, want empty", s.importErr)
+	}
+	if len(s.pairs) != 2 {
+		t.Fatalf("pairs = %v, want 2 entries", s.pairs)
+	}
+
+	env := s.toEnvironment()
+	if env.Vars["BASE_URL"] != "https://example.com" || env.Vars["TOKEN"] != "abc" {
+		t.Errorf("Vars = %v", env.Vars)
+	}
+}
+
+func TestEnvEditorImportUpdatesExistingKeyInPlace(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.name.SetValue("dev")
+	s.pairs = []kvPair{{key: "BASE_URL", value: "https://old.example.com"}, {key: "KEEP", value: "me"}}
+	path := writeEnvFile(t, "BASE_URL=https://new.example.com\n")
+
+	s.startImport()
+	s.pathInput.SetValue(path)
+	s.commitImport()
+
+	if len(s.pairs) != 2 {
+		t.Fatalf("pairs = %v, want 2 entries (update in place, not append)", s.pairs)
+	}
+	env := s.toEnvironment()
+	if env.Vars["BASE_URL"] != "https://new.example.com" {
+		t.Errorf(`Vars["BASE_URL"] = %q, want updated value`, env.Vars["BASE_URL"])
+	}
+	if env.Vars["KEEP"] != "me" {
+		t.Errorf(`Vars["KEEP"] = %q, want untouched "me"`, env.Vars["KEEP"])
+	}
+}
+
+func TestEnvEditorImportEmptyPathIsError(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.startImport()
+	s.pathInput.SetValue("   ")
+	s.commitImport()
+
+	if !s.importing {
+		t.Errorf("expected modal to stay open on empty path")
+	}
+	if s.importErr == "" {
+		t.Errorf("expected importErr to be set for an empty path")
+	}
+}
+
+func TestEnvEditorImportMissingFileIsError(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.startImport()
+	s.pathInput.SetValue(filepath.Join(t.TempDir(), "does-not-exist.env"))
+	s.commitImport()
+
+	if !s.importing {
+		t.Errorf("expected modal to stay open when the file can't be read")
+	}
+	if s.importErr == "" {
+		t.Errorf("expected importErr to be set for a missing file")
+	}
+	if len(s.pairs) != 0 {
+		t.Errorf("pairs = %v, want unchanged (empty) after a failed import", s.pairs)
+	}
+}
+
+func TestEnvEditorCloseImportModal(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.startImport()
+	s.closeImportModal()
+
+	if s.importing {
+		t.Errorf("expected importing=false after closeImportModal")
+	}
+}
+
+func TestEnvEditorSessionOnlyFlag(t *testing.T) {
+	s := newEnvEditorScreen()
+	if s.sessionOnly {
+		t.Errorf("sessionOnly should default to false")
+	}
+	s.sessionOnly = true
+	s.loadNew()
+	if s.sessionOnly {
+		t.Errorf("loadNew should reset sessionOnly to false")
 	}
 }

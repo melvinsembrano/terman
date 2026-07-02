@@ -7,13 +7,13 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/melvinsembrano/terman/internal/model"
-	"github.com/melvinsembrano/terman/internal/store"
 )
 
 func envListHelpKeys() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit")),
 		key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
+		key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "load session env")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "set active")),
 	}
@@ -21,15 +21,23 @@ func envListHelpKeys() []key.Binding {
 
 // envItem adapts model.Environment to bubbles/list's Item interface.
 type envItem struct {
-	env    model.Environment
-	active bool
+	env     model.Environment
+	active  bool
+	session bool
 }
 
 func (i envItem) Title() string {
+	var tags []string
 	if i.active {
-		return i.env.Name + " (active)"
+		tags = append(tags, "active")
 	}
-	return i.env.Name
+	if i.session {
+		tags = append(tags, "session")
+	}
+	if len(tags) == 0 {
+		return i.env.Name
+	}
+	return i.env.Name + " (" + strings.Join(tags, ", ") + ")"
 }
 
 func (i envItem) Description() string {
@@ -42,49 +50,42 @@ func (i envItem) Description() string {
 
 func (i envItem) FilterValue() string { return i.env.Name }
 
-// envListScreen shows the saved environments.
+// envListScreen shows the saved and session-only environments. It holds no
+// store connection of its own — it's a pure view over whatever appModel
+// passes in, since session-only environments never exist on disk.
 type envListScreen struct {
 	lst list.Model
 }
 
-func envItems(active string) ([]list.Item, error) {
-	envs, err := store.LoadEnvs()
-	if err != nil {
-		return nil, err
-	}
+func envItems(envs []model.Environment, active string, sessionEnvs map[string]bool) []list.Item {
 	items := make([]list.Item, len(envs))
 	for i, e := range envs {
-		items[i] = envItem{env: e, active: strings.EqualFold(e.Name, active)}
+		items[i] = envItem{
+			env:     e,
+			active:  strings.EqualFold(e.Name, active),
+			session: sessionEnvs[strings.ToLower(e.Name)],
+		}
 	}
-	return items, nil
+	return items
 }
 
-func newEnvListScreen(active string) (envListScreen, error) {
-	items, err := envItems(active)
-	if err != nil {
-		return envListScreen{}, err
-	}
+func newEnvListScreen(envs []model.Environment, active string, sessionEnvs map[string]bool) envListScreen {
 	delegate := list.NewDefaultDelegate()
-	lst := list.New(items, delegate, 0, 0)
+	lst := list.New(envItems(envs, active, sessionEnvs), delegate, 0, 0)
 	lst.Title = "Environments"
 	lst.SetShowHelp(true)
 	lst.AdditionalShortHelpKeys = envListHelpKeys
 	lst.AdditionalFullHelpKeys = envListHelpKeys
-	return envListScreen{lst: lst}, nil
+	return envListScreen{lst: lst}
 }
 
 func (s *envListScreen) setSize(w, h int) {
 	s.lst.SetSize(w, h)
 }
 
-// refresh reloads the environment list, marking active by name.
-func (s *envListScreen) refresh(active string) error {
-	items, err := envItems(active)
-	if err != nil {
-		return err
-	}
-	s.lst.SetItems(items)
-	return nil
+// refresh replaces the list's items, marking active/session by name.
+func (s *envListScreen) refresh(envs []model.Environment, active string, sessionEnvs map[string]bool) {
+	s.lst.SetItems(envItems(envs, active, sessionEnvs))
 }
 
 func (s envListScreen) selected() (model.Environment, bool) {

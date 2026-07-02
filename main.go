@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/melvinsembrano/terman/internal/dotenv"
 	"github.com/melvinsembrano/terman/internal/httpx"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
@@ -59,13 +60,15 @@ Usage:
   terman env list                       List saved environments
   terman env show <name>                Show an environment's variables
   terman env set <name> <k=v>...        Create/update an environment's variables
+  terman env import <file> <name>       Merge a .env file's variables into an environment
   terman env unset <name> <key>...      Remove variables from an environment
   terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
   terman help                           Show this help
 
 Flags for "run":
-  --env <name>      Use this environment instead of the active one
+  --env <name>       Use this environment instead of the active one
+  --env-file <path>  Load extra variables from a .env file for this run only (not saved)
   --var k=v          Override/add a variable (repeatable)
   -i                 Also print response headers
 `)
@@ -95,14 +98,33 @@ func parseVarOverrides(pairs []string) (map[string]string, error) {
 	return overrides, nil
 }
 
+// upsertEnvVars merges overrides into the saved environment named name,
+// creating it if it doesn't already exist, and persists the result. Used
+// by both "env set" (from --var-style pairs) and "env import" (from a
+// parsed .env file).
+func upsertEnvVars(name string, overrides map[string]string) error {
+	env, err := store.LoadEnv(name)
+	if err != nil {
+		env = model.Environment{Name: name}
+	}
+	if env.Vars == nil {
+		env.Vars = map[string]string{}
+	}
+	for k, v := range overrides {
+		env.Vars[k] = v
+	}
+	return store.SaveEnv(env, "")
+}
+
 func cmdRun(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terman run <name> [--env <name>] [--var k=v] [-i]")
+		return fmt.Errorf("usage: terman run <name> [--env <name>] [--env-file <path>] [--var k=v] [-i]")
 	}
 	name := args[0]
 
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	envName := fs.String("env", "", "environment to use")
+	envFile := fs.String("env-file", "", "load additional variables from a .env file for this run only")
 	printHeaders := fs.Bool("i", false, "also print response headers")
 	var varOverrides stringSlice
 	fs.Var(&varOverrides, "var", "override/add a variable, k=v (repeatable)")
@@ -131,12 +153,22 @@ func cmdRun(args []string) error {
 		envVars = env.Vars
 	}
 
+	var fileVars map[string]string
+	if *envFile != "" {
+		fileVars, err = dotenv.ParseFile(*envFile)
+		if err != nil {
+			return err
+		}
+	}
+
 	overrides, err := parseVarOverrides(varOverrides)
 	if err != nil {
 		return err
 	}
 
-	resolved := vars.Merge(envVars, overrides)
+	// Precedence, lowest to highest: active/--env environment, --env-file,
+	// --var. Nothing here is persisted — this is a single-invocation overlay.
+	resolved := vars.Merge(envVars, fileVars, overrides)
 
 	resp, err := httpx.Do(req, resolved)
 	if err != nil {
@@ -224,22 +256,21 @@ func cmdEnv(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: terman env set <name> <k=v>...")
 		}
-		name := args[1]
 		overrides, err := parseVarOverrides(args[2:])
 		if err != nil {
 			return err
 		}
-		env, err := store.LoadEnv(name)
+		return upsertEnvVars(args[1], overrides)
+	case "import":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: terman env import <file> <name>")
+		}
+		file, name := args[1], args[2]
+		parsed, err := dotenv.ParseFile(file)
 		if err != nil {
-			env = model.Environment{Name: name}
+			return err
 		}
-		if env.Vars == nil {
-			env.Vars = map[string]string{}
-		}
-		for k, v := range overrides {
-			env.Vars[k] = v
-		}
-		return store.SaveEnv(env, "")
+		return upsertEnvVars(name, parsed)
 	case "unset":
 		if len(args) < 3 {
 			return fmt.Errorf("usage: terman env unset <name> <key>...")

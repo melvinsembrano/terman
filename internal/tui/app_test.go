@@ -218,6 +218,232 @@ func TestEnvEditorSaveCreatesEnvAndReturnsToList(t *testing.T) {
 	}
 }
 
+func TestPressLFlagsSessionOnly(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("L")})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvList returned %T, want appModel", updated)
+	}
+	if am.screen != screenEnvEditor {
+		t.Errorf("screen = %v, want screenEnvEditor (%v)", am.screen, screenEnvEditor)
+	}
+	if !am.envEditor.sessionOnly {
+		t.Errorf("expected envEditor.sessionOnly=true after pressing L")
+	}
+}
+
+func TestEnvEditorSaveSessionOnlyDoesNotTouchStore(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenEnvEditor
+	m.envEditor.loadNew()
+	m.envEditor.sessionOnly = true
+	m.envEditor.name.SetValue("temp")
+	m.envEditor.pairs = []kvPair{{key: "base_url", value: "https://example.com"}}
+
+	updated, _ := m.updateEnvEditor(tea.KeyMsg{Type: tea.KeyCtrlS})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvEditor returned %T, want appModel", updated)
+	}
+	if am.screen != screenEnvList {
+		t.Errorf("screen = %v, want screenEnvList (%v)", am.screen, screenEnvList)
+	}
+	if !am.isSessionEnv("temp") {
+		t.Errorf("expected 'temp' to be tracked as a session env")
+	}
+	if am.activeEnv != "temp" {
+		t.Errorf("activeEnv = %q, want %q (session save should auto-activate)", am.activeEnv, "temp")
+	}
+
+	// Nothing should have been written to disk.
+	if _, err := store.LoadEnv("temp"); err == nil {
+		t.Error("expected session env NOT to be persisted to the store")
+	}
+	persistedActive, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if persistedActive != "" {
+		t.Errorf("persisted active env = %q, want empty (session activation must not persist)", persistedActive)
+	}
+}
+
+func TestEnvListDeleteSessionEnvDoesNotTouchStore(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := appModel{
+		envs:        []model.Environment{{Name: "temp"}},
+		sessionEnvs: map[string]bool{"temp": true},
+		activeEnv:   "temp",
+		envList:     newEnvListScreen([]model.Environment{{Name: "temp"}}, "temp", map[string]bool{"temp": true}),
+	}
+	m.envList.lst.Select(0)
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvList returned %T, want appModel", updated)
+	}
+	if am.isSessionEnv("temp") {
+		t.Errorf("expected 'temp' to be removed from sessionEnvs")
+	}
+	if len(am.envs) != 0 {
+		t.Errorf("envs = %v, want empty after deleting the only session env", am.envs)
+	}
+	if am.activeEnv != "" {
+		t.Errorf("activeEnv = %q, want empty after deleting the active session env", am.activeEnv)
+	}
+}
+
+func TestEnvListEditSkipsSessionEnv(t *testing.T) {
+	envs := []model.Environment{{Name: "temp"}}
+	sessionEnvs := map[string]bool{"temp": true}
+	m := appModel{
+		envs:        envs,
+		sessionEnvs: sessionEnvs,
+		envList:     newEnvListScreen(envs, "", sessionEnvs),
+		envEditor:   newEnvEditorScreen(),
+	}
+	m.envList.lst.Select(0)
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyEnter})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvList returned %T, want appModel", updated)
+	}
+	if am.screen != screenEnvList {
+		t.Errorf("screen = %v, want to stay on screenEnvList (editing a session env is not supported)", am.screen)
+	}
+}
+
+func TestCycleActiveEnvSkipsPersistingSessionEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := appModel{
+		envs:        []model.Environment{{Name: "temp"}},
+		sessionEnvs: map[string]bool{"temp": true},
+	}
+
+	m.cycleActiveEnv() // "" -> "temp"
+	if m.activeEnv != "temp" {
+		t.Fatalf("activeEnv = %q, want %q", m.activeEnv, "temp")
+	}
+	persisted, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if persisted != "" {
+		t.Errorf("persisted active env = %q, want empty (session env must not be persisted)", persisted)
+	}
+}
+
+func TestEnvListSetActiveSkipsPersistingSessionEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	envs := []model.Environment{{Name: "temp"}}
+	sessionEnvs := map[string]bool{"temp": true}
+	m := appModel{
+		envs:        envs,
+		sessionEnvs: sessionEnvs,
+		envList:     newEnvListScreen(envs, "", sessionEnvs),
+	}
+	m.envList.lst.Select(0)
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvList returned %T, want appModel", updated)
+	}
+	if am.activeEnv != "temp" {
+		t.Errorf("activeEnv = %q, want %q", am.activeEnv, "temp")
+	}
+	persisted, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if persisted != "" {
+		t.Errorf("persisted active env = %q, want empty", persisted)
+	}
+}
+
+func TestReloadEnvsKeepsUnshadowedSessionEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "prod"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	m := appModel{
+		envs:        []model.Environment{{Name: "prod"}, {Name: "temp", Vars: map[string]string{"a": "1"}}},
+		sessionEnvs: map[string]bool{"temp": true},
+		activeEnv:   "temp",
+	}
+
+	if err := m.reloadEnvs(); err != nil {
+		t.Fatalf("reloadEnvs: %v", err)
+	}
+
+	if !m.isSessionEnv("temp") {
+		t.Errorf("expected 'temp' to remain a session env")
+	}
+	if m.activeEnv != "temp" {
+		t.Errorf("activeEnv = %q, want %q (unshadowed session env should survive reload)", m.activeEnv, "temp")
+	}
+	found := false
+	for _, e := range m.envs {
+		if e.Name == "temp" {
+			found = true
+			if e.Vars["a"] != "1" {
+				t.Errorf("temp.Vars = %v, want a=1 preserved", e.Vars)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("envs = %v, want 'temp' to still be present", m.envs)
+	}
+}
+
+func TestReloadEnvsDropsShadowedSessionEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// A persisted env now exists with the same name as the session env.
+	if err := store.SaveEnv(model.Environment{Name: "temp", Vars: map[string]string{"persisted": "yes"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	m := appModel{
+		envs:        []model.Environment{{Name: "temp", Vars: map[string]string{"session": "yes"}}},
+		sessionEnvs: map[string]bool{"temp": true},
+		activeEnv:   "temp",
+	}
+
+	if err := m.reloadEnvs(); err != nil {
+		t.Fatalf("reloadEnvs: %v", err)
+	}
+
+	if m.isSessionEnv("temp") {
+		t.Errorf("expected the session marker for 'temp' to be dropped once shadowed by a persisted env")
+	}
+	if len(m.envs) != 1 {
+		t.Fatalf("envs = %v, want exactly 1 (deduped) entry", m.envs)
+	}
+	if m.envs[0].Vars["persisted"] != "yes" {
+		t.Errorf("expected the persisted version of 'temp' to win, got %v", m.envs[0])
+	}
+	if m.activeEnv != "temp" {
+		t.Errorf("activeEnv = %q, want %q (still exists, now as the persisted env)", m.activeEnv, "temp")
+	}
+}
+
 func TestEnvEditorSaveBlockedWhileRowModalOpen(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m, err := newAppModel()

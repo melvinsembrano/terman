@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/melvinsembrano/terman/internal/dotenv"
 	"github.com/melvinsembrano/terman/internal/model"
 )
 
@@ -43,6 +44,15 @@ type envEditorScreen struct {
 	valInput  textinput.Model
 	editFocus int // envFocusKey | envFocusValue
 
+	importing bool // import-from-file modal open
+	pathInput textinput.Model
+	importErr string
+
+	// sessionOnly marks an environment created via the list's "L" (load
+	// session env) key. Saving it never touches disk — see appModel's
+	// addSessionEnv.
+	sessionOnly bool
+
 	err string
 }
 
@@ -59,7 +69,11 @@ func newEnvEditorScreen() envEditorScreen {
 	valIn.Placeholder = "value"
 	valIn.CharLimit = 2048
 
-	return envEditorScreen{name: name, keyInput: keyIn, valInput: valIn, editIdx: -1}
+	pathIn := textinput.New()
+	pathIn.Placeholder = ".env or .env.production"
+	pathIn.CharLimit = 4096
+
+	return envEditorScreen{name: name, keyInput: keyIn, valInput: valIn, pathInput: pathIn, editIdx: -1}
 }
 
 func (s *envEditorScreen) setSize(w, h int) {
@@ -70,6 +84,7 @@ func (s *envEditorScreen) setSize(w, h int) {
 	s.name.Width = fieldW
 	s.keyInput.Width = fieldW / 2
 	s.valInput.Width = fieldW / 2
+	s.pathInput.Width = fieldW
 }
 
 // loadNew resets the form for creating a new environment.
@@ -79,6 +94,7 @@ func (s *envEditorScreen) loadNew() {
 	s.name.Width = w
 	s.keyInput.Width = w / 2
 	s.valInput.Width = w / 2
+	s.pathInput.Width = w
 	s.setSectionFocus(envSectionName)
 }
 
@@ -174,6 +190,56 @@ func (s *envEditorScreen) deleteSelectedRow() {
 	}
 }
 
+// startImport opens the "import from .env file" modal.
+func (s *envEditorScreen) startImport() {
+	s.importing = true
+	s.importErr = ""
+	s.pathInput.SetValue("")
+	s.pathInput.Focus()
+}
+
+func (s *envEditorScreen) closeImportModal() {
+	s.importing = false
+	s.pathInput.Blur()
+}
+
+// commitImport parses the file at the modal's path and upserts its
+// variables into pairs: existing keys are updated in place, new keys are
+// appended (sorted for deterministic ordering), mirroring the CLI's
+// "env import" merge semantics.
+func (s *envEditorScreen) commitImport() {
+	path := strings.TrimSpace(s.pathInput.Value())
+	if path == "" {
+		s.importErr = "path is required"
+		return
+	}
+	parsed, err := dotenv.ParseFile(path)
+	if err != nil {
+		s.importErr = err.Error()
+		return
+	}
+
+	index := map[string]int{}
+	for i, p := range s.pairs {
+		index[p.key] = i
+	}
+	keys := make([]string, 0, len(parsed))
+	for k := range parsed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := parsed[k]
+		if i, ok := index[k]; ok {
+			s.pairs[i].value = v
+		} else {
+			s.pairs = append(s.pairs, kvPair{key: k, value: v})
+			index[k] = len(s.pairs) - 1
+		}
+	}
+	s.closeImportModal()
+}
+
 func (s *envEditorScreen) setSectionFocus(section int) {
 	s.section = section
 	if section == envSectionName {
@@ -214,6 +280,20 @@ func (s envEditorScreen) Update(msg tea.Msg) (envEditorScreen, tea.Cmd) {
 			return s, cmd
 		}
 
+		if s.importing {
+			switch key.String() {
+			case "esc":
+				s.closeImportModal()
+				return s, nil
+			case "enter":
+				s.commitImport()
+				return s, nil
+			}
+			var cmd tea.Cmd
+			s.pathInput, cmd = s.pathInput.Update(msg)
+			return s, cmd
+		}
+
 		switch key.String() {
 		case "tab", "shift+tab":
 			if s.section == envSectionName {
@@ -235,6 +315,11 @@ func (s envEditorScreen) Update(msg tea.Msg) (envEditorScreen, tea.Cmd) {
 		case "a":
 			if s.section == envSectionRows {
 				s.startAddRow()
+				return s, nil
+			}
+		case "i":
+			if s.section == envSectionRows {
+				s.startImport()
 				return s, nil
 			}
 		case "enter":
@@ -261,7 +346,11 @@ func (s envEditorScreen) Update(msg tea.Msg) (envEditorScreen, tea.Cmd) {
 func (s envEditorScreen) View() string {
 	var b strings.Builder
 
-	b.WriteString(labelStyle.Render("Name") + "\n" + s.name.View() + "\n\n")
+	nameLabel := labelStyle.Render("Name")
+	if s.sessionOnly {
+		nameLabel += "  " + subtleStyle.Render("(session — not saved to disk)")
+	}
+	b.WriteString(nameLabel + "\n" + s.name.View() + "\n\n")
 	b.WriteString(labelStyle.Render("Variables") + "\n")
 	if len(s.pairs) == 0 {
 		b.WriteString(blurredStyle.Render("(none — press 'a' to add one)") + "\n")
@@ -285,9 +374,19 @@ func (s envEditorScreen) View() string {
 		return b.String()
 	}
 
+	if s.importing {
+		b.WriteString(labelStyle.Render("Import from .env file") + "\n")
+		b.WriteString("Path: " + s.pathInput.View() + "\n\n")
+		if s.importErr != "" {
+			b.WriteString(errorStyle.Render("error: "+s.importErr) + "\n\n")
+		}
+		b.WriteString(helpStyle.Render("enter import • esc cancel"))
+		return b.String()
+	}
+
 	if s.err != "" {
 		b.WriteString(errorStyle.Render("error: "+s.err) + "\n\n")
 	}
-	b.WriteString(helpStyle.Render("tab move field • ↑/↓ select row • a add • enter edit row • d delete row • ctrl+s save • esc cancel"))
+	b.WriteString(helpStyle.Render("tab move field • ↑/↓ select row • a add • i import • enter edit row • d delete row • ctrl+s save • esc cancel"))
 	return b.String()
 }

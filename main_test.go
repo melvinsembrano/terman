@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -237,6 +238,81 @@ func TestCmdEnvSetMissingArgs(t *testing.T) {
 	}
 }
 
+func TestCmdEnvImportCreatesNewEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env.dev")
+	if err := os.WriteFile(path, []byte("BASE_URL=https://example.com\nTOKEN=abc\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := cmdEnv([]string{"import", path, "dev"}); err != nil {
+		t.Fatalf("cmdEnv import: %v", err)
+	}
+
+	env, err := store.LoadEnv("dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if env.Vars["BASE_URL"] != "https://example.com" || env.Vars["TOKEN"] != "abc" {
+		t.Errorf("env.Vars = %v", env.Vars)
+	}
+}
+
+func TestCmdEnvImportMergesIntoExistingEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"a": "1", "b": "2"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	// Overwrite "b" and add "c"; "a" should be left untouched.
+	if err := os.WriteFile(path, []byte("b=updated\nc=3\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := cmdEnv([]string{"import", path, "dev"}); err != nil {
+		t.Fatalf("cmdEnv import: %v", err)
+	}
+
+	env, err := store.LoadEnv("dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	want := map[string]string{"a": "1", "b": "updated", "c": "3"}
+	for k, v := range want {
+		if env.Vars[k] != v {
+			t.Errorf("env.Vars[%q] = %q, want %q", k, env.Vars[k], v)
+		}
+	}
+}
+
+func TestCmdEnvImportMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"import", "path-only"}); err == nil {
+		t.Error("expected error for env import with no name")
+	}
+}
+
+func TestCmdEnvImportMissingFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"import", filepath.Join(t.TempDir(), "nope.env"), "dev"}); err == nil {
+		t.Error("expected error for a missing .env file")
+	}
+}
+
+func TestCmdEnvImportMalformedFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("NOTAVAR\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := cmdEnv([]string{"import", path, "dev"}); err == nil {
+		t.Error("expected error for a malformed .env file")
+	}
+}
+
 func TestCmdEnvShow(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"base_url": "https://example.com"}}, ""); err != nil {
@@ -449,5 +525,61 @@ func TestCmdRunSuccess(t *testing.T) {
 	}
 	if !strings.Contains(out, "200") || !strings.Contains(out, "pong") {
 		t.Errorf("cmdRun output = %q, want to contain status 200 and body", out)
+	}
+}
+
+// TestCmdRunEnvFilePrecedence verifies the --env-file overlay: it sits
+// between the active/--env environment and --var overrides. base_url comes
+// only from the environment, token comes only from the file, and msg is
+// set by all three layers to prove --var wins over --env-file which wins
+// over the environment.
+func TestCmdRunEnvFilePrecedence(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := store.SaveEnv(model.Environment{
+		Name: "dev",
+		Vars: map[string]string{"base_url": srv.URL, "msg": "from-env"},
+	}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SaveRequest(model.Request{
+		Name:   "Ping",
+		Method: "GET",
+		URL:    "{{base_url}}/ping?msg={{msg}}&token={{token}}",
+	}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	envFilePath := filepath.Join(t.TempDir(), ".env.local")
+	if err := os.WriteFile(envFilePath, []byte("msg=from-file\ntoken=abc\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	captureStdout(t, func() {
+		if err := cmdRun([]string{"Ping", "--env", "dev", "--env-file", envFilePath, "--var", "msg=from-var"}); err != nil {
+			t.Fatalf("cmdRun: %v", err)
+		}
+	})
+
+	want := "msg=from-var&token=abc"
+	if gotQuery != want {
+		t.Errorf("server received query = %q, want %q", gotQuery, want)
+	}
+}
+
+func TestCmdRunEnvFileMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	if err := cmdRun([]string{"Req", "--env-file", filepath.Join(t.TempDir(), "nope.env")}); err == nil {
+		t.Error("expected error for a missing --env-file")
 	}
 }
