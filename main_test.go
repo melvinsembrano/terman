@@ -123,10 +123,10 @@ func TestCmdListShowsSavedRequests(t *testing.T) {
 
 func TestCmdEnvListMarksActive(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveEnv(model.Environment{Name: "dev"}); err != nil {
+	if err := store.SaveEnv(model.Environment{Name: "dev"}, ""); err != nil {
 		t.Fatalf("SaveEnv: %v", err)
 	}
-	if err := store.SaveEnv(model.Environment{Name: "prod"}); err != nil {
+	if err := store.SaveEnv(model.Environment{Name: "prod"}, ""); err != nil {
 		t.Fatalf("SaveEnv: %v", err)
 	}
 	if err := store.SetActiveEnv("prod"); err != nil {
@@ -148,7 +148,7 @@ func TestCmdEnvListMarksActive(t *testing.T) {
 
 func TestCmdEnvUse(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveEnv(model.Environment{Name: "staging"}); err != nil {
+	if err := store.SaveEnv(model.Environment{Name: "staging"}, ""); err != nil {
 		t.Fatalf("SaveEnv: %v", err)
 	}
 
@@ -181,6 +181,202 @@ func TestCmdEnvMissingArgs(t *testing.T) {
 	}
 	if err := cmdEnv([]string{"bogus"}); err == nil {
 		t.Error("expected error for unknown env subcommand")
+	}
+}
+
+func TestCmdEnvSetCreatesNewEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := cmdEnv([]string{"set", "dev", "base_url=https://example.com", "token=abc"}); err != nil {
+		t.Fatalf("cmdEnv set: %v", err)
+	}
+
+	env, err := store.LoadEnv("dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if env.Vars["base_url"] != "https://example.com" || env.Vars["token"] != "abc" {
+		t.Errorf("env.Vars = %v, want base_url/token set", env.Vars)
+	}
+}
+
+func TestCmdEnvSetUpdatesExistingEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"a": "1", "b": "2"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	// Overwrite "a" and add "c"; "b" should be left untouched.
+	if err := cmdEnv([]string{"set", "dev", "a=updated", "c=3"}); err != nil {
+		t.Fatalf("cmdEnv set: %v", err)
+	}
+
+	env, err := store.LoadEnv("dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	want := map[string]string{"a": "updated", "b": "2", "c": "3"}
+	for k, v := range want {
+		if env.Vars[k] != v {
+			t.Errorf("env.Vars[%q] = %q, want %q", k, env.Vars[k], v)
+		}
+	}
+}
+
+func TestCmdEnvSetInvalidPair(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"set", "dev", "badformat"}); err == nil {
+		t.Error("expected error for malformed k=v pair")
+	}
+}
+
+func TestCmdEnvSetMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"set"}); err == nil {
+		t.Error("expected error for env set with no name")
+	}
+}
+
+func TestCmdEnvShow(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"base_url": "https://example.com"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdEnv([]string{"show", "dev"}); err != nil {
+			t.Fatalf("cmdEnv show: %v", err)
+		}
+	})
+	if !strings.Contains(out, "base_url=https://example.com") {
+		t.Errorf("cmdEnv show output = %q, want to contain %q", out, "base_url=https://example.com")
+	}
+}
+
+func TestCmdEnvShowNoVariables(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "empty"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdEnv([]string{"show", "empty"}); err != nil {
+			t.Fatalf("cmdEnv show: %v", err)
+		}
+	})
+	if !strings.Contains(out, "no variables") {
+		t.Errorf("cmdEnv show output = %q, want to contain %q", out, "no variables")
+	}
+}
+
+func TestCmdEnvShowUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"show", "nope"}); err == nil {
+		t.Error("expected error showing an unknown environment")
+	}
+}
+
+func TestCmdEnvUnset(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"a": "1", "b": "2"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"unset", "dev", "a"}); err != nil {
+		t.Fatalf("cmdEnv unset: %v", err)
+	}
+
+	env, err := store.LoadEnv("dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if _, ok := env.Vars["a"]; ok {
+		t.Errorf("expected key 'a' to be removed, Vars = %v", env.Vars)
+	}
+	if env.Vars["b"] != "2" {
+		t.Errorf("expected key 'b' to remain, Vars = %v", env.Vars)
+	}
+}
+
+func TestCmdEnvUnsetMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"unset", "dev"}); err == nil {
+		t.Error("expected error for env unset with no keys")
+	}
+}
+
+func TestCmdEnvUnsetUnknownEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"unset", "nope", "a"}); err == nil {
+		t.Error("expected error unsetting a var on an unknown environment")
+	}
+}
+
+func TestCmdEnvDelete(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"delete", "dev"}); err != nil {
+		t.Fatalf("cmdEnv delete: %v", err)
+	}
+	if _, err := store.LoadEnv("dev"); err == nil {
+		t.Error("expected env to be deleted")
+	}
+}
+
+func TestCmdEnvDeleteClearsActive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SetActiveEnv("dev"); err != nil {
+		t.Fatalf("SetActiveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"delete", "dev"}); err != nil {
+		t.Fatalf("cmdEnv delete: %v", err)
+	}
+
+	active, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if active != "" {
+		t.Errorf("active env after deleting it = %q, want empty", active)
+	}
+}
+
+func TestCmdEnvDeleteLeavesOtherActiveEnvAlone(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SaveEnv(model.Environment{Name: "prod"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SetActiveEnv("prod"); err != nil {
+		t.Fatalf("SetActiveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"delete", "dev"}); err != nil {
+		t.Fatalf("cmdEnv delete: %v", err)
+	}
+
+	active, err := store.GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if active != "prod" {
+		t.Errorf("active env = %q, want %q (unaffected by deleting a different env)", active, "prod")
+	}
+}
+
+func TestCmdEnvDeleteMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"delete"}); err == nil {
+		t.Error("expected error for env delete with no name")
 	}
 }
 
@@ -231,7 +427,7 @@ func TestCmdRunSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"base_url": srv.URL}}); err != nil {
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"base_url": srv.URL}}, ""); err != nil {
 		t.Fatalf("SaveEnv: %v", err)
 	}
 	if err := store.SaveRequest(model.Request{

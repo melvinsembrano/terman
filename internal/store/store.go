@@ -230,8 +230,10 @@ func LoadEnv(name string) (model.Environment, error) {
 	return model.Environment{}, fmt.Errorf("no saved environment named %q", name)
 }
 
-// SaveEnv writes e to its slug-named file.
-func SaveEnv(e model.Environment) error {
+// SaveEnv writes e to its slug-named file. If prevName is non-empty and its
+// slug differs from e.Name's slug (i.e. the environment was renamed), the
+// old file is removed after the new one is written successfully.
+func SaveEnv(e model.Environment, prevName string) error {
 	dir, err := EnvsDir()
 	if err != nil {
 		return err
@@ -244,7 +246,13 @@ func SaveEnv(e model.Environment) error {
 		return err
 	}
 	path := filepath.Join(dir, slug(e.Name)+".yaml")
-	return os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	if prevName != "" && slug(prevName) != slug(e.Name) {
+		_ = os.Remove(filepath.Join(dir, slug(prevName)+".yaml"))
+	}
+	return nil
 }
 
 // DeleteEnv removes the saved environment with the given name.

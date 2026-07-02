@@ -14,6 +14,7 @@ func listHelpKeys() []key.Binding {
 		key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "cycle env")),
+		key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "manage envs")),
 	}
 }
 

@@ -100,7 +100,7 @@ func TestEnvSaveLoadDelete(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	env := model.Environment{Name: "Dev", Vars: map[string]string{"base_url": "https://example.com"}}
-	if err := SaveEnv(env); err != nil {
+	if err := SaveEnv(env, ""); err != nil {
 		t.Fatalf("SaveEnv: %v", err)
 	}
 
@@ -117,6 +117,38 @@ func TestEnvSaveLoadDelete(t *testing.T) {
 	}
 	if _, err := LoadEnv("Dev"); err == nil {
 		t.Errorf("expected env to be deleted")
+	}
+}
+
+func TestSaveEnvRenameRemovesOldFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	env := model.Environment{Name: "Dev", Vars: map[string]string{"base_url": "https://dev.example.com"}}
+	if err := SaveEnv(env, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	renamed := env
+	renamed.Name = "Staging"
+	if err := SaveEnv(renamed, env.Name); err != nil {
+		t.Fatalf("SaveEnv (rename): %v", err)
+	}
+
+	if _, err := LoadEnv("Dev"); err == nil {
+		t.Errorf("expected old env name to be gone after rename")
+	}
+	got, err := LoadEnv("Staging")
+	if err != nil {
+		t.Fatalf("LoadEnv (renamed): %v", err)
+	}
+	if got.Vars["base_url"] != env.Vars["base_url"] {
+		t.Errorf("renamed env Vars = %v, want %v", got.Vars, env.Vars)
+	}
+
+	dir, _ := EnvsDir()
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 env file after rename, got %d", len(entries))
 	}
 }
 
@@ -188,7 +220,7 @@ func TestLoadEnvsSortedCaseInsensitive(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	for _, name := range []string{"staging", "Dev", "prod"} {
-		if err := SaveEnv(model.Environment{Name: name}); err != nil {
+		if err := SaveEnv(model.Environment{Name: name}, ""); err != nil {
 			t.Fatalf("SaveEnv(%q): %v", name, err)
 		}
 	}

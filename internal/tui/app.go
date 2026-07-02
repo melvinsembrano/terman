@@ -16,6 +16,8 @@ const (
 	screenList screen = iota
 	screenEditor
 	screenResponse
+	screenEnvList
+	screenEnvEditor
 )
 
 // headerLines is how many rows the header (title/env line + blank line)
@@ -30,6 +32,9 @@ type appModel struct {
 	list     listScreen
 	editor   editorScreen
 	response responseScreen
+
+	envList   envListScreen
+	envEditor envEditorScreen
 
 	activeEnv string
 	envs      []model.Environment
@@ -58,6 +63,10 @@ func newAppModel() (appModel, error) {
 	if err != nil {
 		return appModel{}, err
 	}
+	envLst, err := newEnvListScreen(active)
+	if err != nil {
+		return appModel{}, err
+	}
 	return appModel{
 		screen:    screenList,
 		activeEnv: active,
@@ -65,6 +74,8 @@ func newAppModel() (appModel, error) {
 		list:      lst,
 		editor:    newEditorScreen(),
 		response:  newResponseScreen(),
+		envList:   envLst,
+		envEditor: newEnvEditorScreen(),
 	}, nil
 }
 
@@ -81,6 +92,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.setSize(msg.Width, bodyH)
 		m.editor.setSize(msg.Width, bodyH)
 		m.response.setSize(msg.Width, bodyH)
+		m.envList.setSize(msg.Width, bodyH)
+		m.envEditor.setSize(msg.Width, bodyH)
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -95,6 +108,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEditor(msg)
 	case screenResponse:
 		return m.updateResponse(msg)
+	case screenEnvList:
+		return m.updateEnvList(msg)
+	case screenEnvEditor:
+		return m.updateEnvEditor(msg)
 	}
 	return m, nil
 }
@@ -122,6 +139,10 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "E":
 			m.cycleActiveEnv()
+			return m, nil
+		case "v":
+			_ = m.envList.refresh(m.activeEnv)
+			m.screen = screenEnvList
 			return m, nil
 		case "enter":
 			if req, ok := m.list.selected(); ok {
@@ -168,6 +189,84 @@ func (m appModel) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m appModel) updateEnvList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && !m.envList.isFiltering() {
+		switch key.String() {
+		case "esc", "q":
+			m.screen = screenList
+			return m, nil
+		case "n":
+			m.envEditor.loadNew()
+			m.screen = screenEnvEditor
+			return m, nil
+		case "e", "enter":
+			if env, ok := m.envList.selected(); ok {
+				m.envEditor.loadEnvironment(env)
+				m.screen = screenEnvEditor
+			}
+			return m, nil
+		case "d":
+			if env, ok := m.envList.selected(); ok {
+				_ = store.DeleteEnv(env.Name)
+				_ = m.reloadEnvs()
+				_ = m.envList.refresh(m.activeEnv)
+			}
+			return m, nil
+		case "u":
+			if env, ok := m.envList.selected(); ok {
+				m.activeEnv = env.Name
+				_ = store.SetActiveEnv(env.Name)
+				_ = m.envList.refresh(m.activeEnv)
+			}
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.envList.lst, cmd = m.envList.lst.Update(msg)
+	return m, cmd
+}
+
+func (m appModel) updateEnvEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			if !m.envEditor.editing {
+				m.envEditor.err = ""
+				m.screen = screenEnvList
+				return m, nil
+			}
+		case "ctrl+s":
+			if m.envEditor.editing {
+				// Block saving while the row-edit modal is open.
+				return m, nil
+			}
+			env := m.envEditor.toEnvironment()
+			if env.Name == "" {
+				m.envEditor.err = "name is required"
+				return m, nil
+			}
+			if err := store.SaveEnv(env, m.envEditor.prevName); err != nil {
+				m.envEditor.err = err.Error()
+				return m, nil
+			}
+			if err := m.reloadEnvs(); err != nil {
+				m.envEditor.err = err.Error()
+				return m, nil
+			}
+			if err := m.envList.refresh(m.activeEnv); err != nil {
+				m.envEditor.err = err.Error()
+				return m, nil
+			}
+			m.envEditor.err = ""
+			m.screen = screenEnvList
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.envEditor, cmd = m.envEditor.Update(msg)
+	return m, cmd
+}
+
 func (m appModel) updateResponse(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case runResultMsg:
@@ -206,6 +305,28 @@ func (m *appModel) cycleActiveEnv() {
 	_ = store.SetActiveEnv(m.activeEnv)
 }
 
+// reloadEnvs re-reads the saved environments from disk. If the currently
+// active environment no longer exists (e.g. it was just deleted or renamed),
+// the active environment is cleared and persisted as "".
+func (m *appModel) reloadEnvs() error {
+	envs, err := store.LoadEnvs()
+	if err != nil {
+		return err
+	}
+	m.envs = envs
+
+	if m.activeEnv == "" {
+		return nil
+	}
+	for _, e := range envs {
+		if strings.EqualFold(e.Name, m.activeEnv) {
+			return nil
+		}
+	}
+	m.activeEnv = ""
+	return store.SetActiveEnv("")
+}
+
 func (m appModel) activeEnvVars() map[string]string {
 	for _, e := range m.envs {
 		if strings.EqualFold(e.Name, m.activeEnv) {
@@ -229,6 +350,10 @@ func (m appModel) View() string {
 		return header + m.editor.View()
 	case screenResponse:
 		return header + m.response.View()
+	case screenEnvList:
+		return header + m.envList.View()
+	case screenEnvEditor:
+		return header + m.envEditor.View()
 	}
 	return header
 }

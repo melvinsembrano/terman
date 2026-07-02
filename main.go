@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/melvinsembrano/terman/internal/httpx"
+	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
 	"github.com/melvinsembrano/terman/internal/tui"
 	"github.com/melvinsembrano/terman/internal/vars"
@@ -55,6 +57,10 @@ Usage:
   terman run <name> [flags]             Run a saved request
   terman list                           List saved requests
   terman env list                       List saved environments
+  terman env show <name>                Show an environment's variables
+  terman env set <name> <k=v>...        Create/update an environment's variables
+  terman env unset <name> <key>...      Remove variables from an environment
+  terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
   terman help                           Show this help
 
@@ -169,7 +175,7 @@ func cmdList(args []string) error {
 
 func cmdEnv(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terman env list | terman env use <name>")
+		return fmt.Errorf("usage: terman env list|show|set|unset|delete|use ...")
 	}
 	switch args[0] {
 	case "list":
@@ -191,6 +197,76 @@ func cmdEnv(args []string) error {
 				marker = "*"
 			}
 			fmt.Printf("%s %s\n", marker, e.Name)
+		}
+		return nil
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: terman env show <name>")
+		}
+		env, err := store.LoadEnv(args[1])
+		if err != nil {
+			return err
+		}
+		if len(env.Vars) == 0 {
+			fmt.Println("no variables")
+			return nil
+		}
+		keys := make([]string, 0, len(env.Vars))
+		for k := range env.Vars {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("%s=%s\n", k, env.Vars[k])
+		}
+		return nil
+	case "set":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: terman env set <name> <k=v>...")
+		}
+		name := args[1]
+		overrides, err := parseVarOverrides(args[2:])
+		if err != nil {
+			return err
+		}
+		env, err := store.LoadEnv(name)
+		if err != nil {
+			env = model.Environment{Name: name}
+		}
+		if env.Vars == nil {
+			env.Vars = map[string]string{}
+		}
+		for k, v := range overrides {
+			env.Vars[k] = v
+		}
+		return store.SaveEnv(env, "")
+	case "unset":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: terman env unset <name> <key>...")
+		}
+		name := args[1]
+		env, err := store.LoadEnv(name)
+		if err != nil {
+			return err
+		}
+		for _, k := range args[2:] {
+			delete(env.Vars, k)
+		}
+		return store.SaveEnv(env, "")
+	case "delete":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: terman env delete <name>")
+		}
+		name := args[1]
+		if err := store.DeleteEnv(name); err != nil {
+			return err
+		}
+		active, err := store.GetActiveEnv()
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(active, name) {
+			return store.SetActiveEnv("")
 		}
 		return nil
 	case "use":
