@@ -1,6 +1,11 @@
 // Package store persists Requests and Environments as one YAML file per
-// item under the user's config directory, plus a small config file that
+// item under the terman data directory, plus a small config file that
 // remembers the active environment.
+//
+// Requests are grouped into folders on disk: each Request lives at
+// <requestsDir>/<group>/<slug(name)>.yaml, where group is a "/"-separated
+// path ("" for the top level). Environments stay flat, one file per name
+// directly under <envsDir>.
 package store
 
 import (
@@ -17,8 +22,8 @@ import (
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// slug turns a request/environment name into a filesystem-safe filename
-// stem, e.g. "Get User (v2)" -> "get-user-v2".
+// slug turns one name/path-segment into a filesystem-safe stem, e.g.
+// "Get User (v2)" -> "get-user-v2".
 func slug(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = slugRe.ReplaceAllString(s, "-")
@@ -29,17 +34,89 @@ func slug(name string) string {
 	return s
 }
 
-// BaseDir returns the terman config root, honoring $XDG_CONFIG_HOME and
-// falling back to ~/.config/terman.
+// slugGroup turns a "/"-separated group path into a filesystem-safe
+// relative directory, slugging each segment individually (so stray
+// characters, "..", or a leading "/" in a hand-typed folder name can't
+// escape the requests directory) and dropping empty segments.
+func slugGroup(group string) string {
+	var parts []string
+	for _, seg := range strings.Split(filepath.ToSlash(group), "/") {
+		if seg = strings.TrimSpace(seg); seg != "" {
+			parts = append(parts, slug(seg))
+		}
+	}
+	return filepath.Join(parts...)
+}
+
+// SplitGroupName splits a "group/sub/name" path (as accepted by the CLI's
+// "run" and "import curl" commands, and shown by "list") into its group
+// ("" if name has no "/") and base name. Only the last "/" is significant,
+// so group segments may themselves contain "/".
+func SplitGroupName(name string) (group, base string) {
+	name = filepath.ToSlash(strings.TrimSpace(name))
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		return name[:idx], name[idx+1:]
+	}
+	return "", name
+}
+
+// FullPath renders a request's group and name back into the "group/name"
+// form SplitGroupName parses, e.g. for CLI output and error messages.
+func FullPath(r model.Request) string {
+	if r.Group == "" {
+		return r.Name
+	}
+	return r.Group + "/" + r.Name
+}
+
+// findUpward walks from dir upward through its ancestors looking for a
+// child directory named name, returning its full path if found.
+func findUpward(dir, name string) (string, bool) {
+	for {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// BaseDir returns the terman data root to use for this run, resolved in
+// order:
+//
+//  1. $XDG_CONFIG_HOME/terman, if $XDG_CONFIG_HOME is set — an explicit
+//     override, honored unconditionally for backward compatibility.
+//  2. The nearest ".terman" directory found by walking up from the
+//     current working directory (project-local, git-style: works from any
+//     subdirectory of a project that already has one).
+//  3. The legacy global "~/.config/terman", if it already exists on disk
+//     (so installs that predate project-local storage keep working).
+//  4. "./.terman" in the current directory, created on first write.
 func BaseDir() (string, error) {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "terman"), nil
 	}
-	home, err := os.UserHomeDir()
+
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "terman"), nil
+	if dir, ok := findUpward(cwd, ".terman"); ok {
+		return dir, nil
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		legacy := filepath.Join(home, ".config", "terman")
+		if info, err := os.Stat(legacy); err == nil && info.IsDir() {
+			return legacy, nil
+		}
+	}
+
+	return filepath.Join(cwd, ".terman"), nil
 }
 
 func RequestsDir() (string, error) {
@@ -96,37 +173,113 @@ func readYAMLFiles[T any](dir string) ([]T, error) {
 	return out, nil
 }
 
-// LoadRequests returns all saved requests, sorted by name.
+// walkRequestFiles walks every request YAML file nested anywhere under
+// dir, calling fn with the file's path, its group (the "/"-separated
+// directory path between dir and the file, "" at the top level), and its
+// unmarshaled contents.
+func walkRequestFiles(dir string, fn func(path, group string, r model.Request) error) error {
+	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var r model.Request
+		if err := yaml.Unmarshal(data, &r); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		rel, err := filepath.Rel(dir, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		group := ""
+		if rel != "." {
+			group = filepath.ToSlash(rel)
+		}
+		return fn(path, group, r)
+	})
+}
+
+// requestPath returns the file a request with the given group and name is
+// (or should be) stored at.
+func requestPath(requestsDir, group, name string) string {
+	return filepath.Join(requestsDir, slugGroup(group), slug(name)+".yaml")
+}
+
+// pruneEmptyGroupDirs removes dir and any now-empty ancestor directories,
+// stopping at (and never removing) root. Best-effort: any error, or a
+// directory that isn't empty, just stops the walk — this is cleanup, not
+// a required part of a save/delete succeeding.
+func pruneEmptyGroupDirs(root, dir string) {
+	for dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if os.Remove(dir) != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+// LoadRequests returns every saved request across every group, sorted by
+// group then name (case-insensitive) — a stable order the UI's folder
+// tree can render directly.
 func LoadRequests() ([]model.Request, error) {
 	dir, err := RequestsDir()
 	if err != nil {
 		return nil, err
 	}
-	reqs, err := readYAMLFiles[model.Request](dir)
+	if err := ensureDir(dir); err != nil {
+		return nil, err
+	}
+	var out []model.Request
+	err = walkRequestFiles(dir, func(_, group string, r model.Request) error {
+		r.Group = group
+		out = append(out, r)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(reqs, func(i, j int) bool {
-		return strings.ToLower(reqs[i].Name) < strings.ToLower(reqs[j].Name)
+	sort.Slice(out, func(i, j int) bool {
+		gi, gj := strings.ToLower(out[i].Group), strings.ToLower(out[j].Group)
+		if gi != gj {
+			return gi < gj
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	return reqs, nil
+	return out, nil
 }
 
-// LoadRequest finds a saved request by name (case-insensitive). It first
-// tries the conventional slug filename, then falls back to scanning all
-// requests by their stored Name field (so a hand-renamed Name inside a
-// file, or a file that doesn't follow the slug convention, still resolves).
+// LoadRequest finds a saved request by name (case-insensitive). name may
+// be a bare request name or a "group/name" path (as shown by "terman
+// list" and accepted by "terman run"). It first tries the conventional
+// slug path implied by the parsed group, then falls back to scanning
+// every saved request by its stored Group/Name (so a hand-renamed or
+// hand-moved file still resolves). A bare name matching requests in more
+// than one group is ambiguous and returns an error listing the
+// candidates.
 func LoadRequest(name string) (model.Request, error) {
 	dir, err := RequestsDir()
 	if err != nil {
 		return model.Request{}, err
 	}
-	path := filepath.Join(dir, slug(name)+".yaml")
+
+	group, base := SplitGroupName(name)
+	path := requestPath(dir, group, base)
 	if data, err := os.ReadFile(path); err == nil {
 		var r model.Request
 		if err := yaml.Unmarshal(data, &r); err != nil {
 			return model.Request{}, fmt.Errorf("%s: %w", path, err)
 		}
+		r.Group = group
 		return r, nil
 	}
 
@@ -134,70 +287,97 @@ func LoadRequest(name string) (model.Request, error) {
 	if err != nil {
 		return model.Request{}, err
 	}
+	var matches []model.Request
 	for _, r := range reqs {
-		if strings.EqualFold(r.Name, name) {
-			return r, nil
+		switch {
+		case strings.EqualFold(FullPath(r), name):
+			matches = append(matches, r)
+		case group == "" && strings.EqualFold(r.Name, name):
+			matches = append(matches, r)
 		}
 	}
-	return model.Request{}, fmt.Errorf("no saved request named %q", name)
+	switch len(matches) {
+	case 0:
+		return model.Request{}, fmt.Errorf("no saved request named %q", name)
+	case 1:
+		return matches[0], nil
+	default:
+		paths := make([]string, len(matches))
+		for i, r := range matches {
+			paths[i] = FullPath(r)
+		}
+		return model.Request{}, fmt.Errorf("%q is ambiguous, matches: %s", name, strings.Join(paths, ", "))
+	}
 }
 
-// SaveRequest writes r to its slug-named file. If prevName is non-empty
-// and its slug differs from r.Name's slug (i.e. the request was renamed),
-// the old file is removed after the new one is written successfully.
-func SaveRequest(r model.Request, prevName string) error {
+// SaveRequest writes r to the file implied by its Group and Name. If
+// prevName is non-empty and (prevGroup, prevName) resolves to a different
+// file than (r.Group, r.Name) — i.e. the request was renamed and/or moved
+// to a different folder — the old file is removed after the new one is
+// written successfully, and its now-possibly-empty group directory is
+// pruned.
+func SaveRequest(r model.Request, prevName, prevGroup string) error {
 	dir, err := RequestsDir()
 	if err != nil {
 		return err
 	}
-	if err := ensureDir(dir); err != nil {
+	path := requestPath(dir, r.Group, r.Name)
+	if err := ensureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(r)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, slug(r.Name)+".yaml")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
-	if prevName != "" && slug(prevName) != slug(r.Name) {
-		_ = os.Remove(filepath.Join(dir, slug(prevName)+".yaml"))
+	if prevName != "" {
+		if oldPath := requestPath(dir, prevGroup, prevName); oldPath != path {
+			_ = os.Remove(oldPath)
+			pruneEmptyGroupDirs(dir, filepath.Dir(oldPath))
+		}
 	}
 	return nil
 }
 
-// DeleteRequest removes the saved request with the given name.
-func DeleteRequest(name string) error {
+// DeleteRequest removes the saved request with the given group ("" for
+// the top level) and name, pruning its group directory if that leaves it
+// empty.
+func DeleteRequest(group, name string) error {
 	dir, err := RequestsDir()
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, slug(name)+".yaml")
+	path := requestPath(dir, group, name)
 	if _, err := os.Stat(path); err == nil {
-		return os.Remove(path)
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		pruneEmptyGroupDirs(dir, filepath.Dir(path))
+		return nil
 	}
+
 	// Fall back to matching by stored Name in case the filename doesn't
 	// follow the slug convention.
-	entries, err := os.ReadDir(dir)
+	var found string
+	err = walkRequestFiles(dir, func(path, fileGroup string, r model.Request) error {
+		if found == "" && strings.EqualFold(fileGroup, group) && strings.EqualFold(r.Name, name) {
+			found = path
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		fp := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(fp)
-		if err != nil {
-			continue
-		}
-		var r model.Request
-		if err := yaml.Unmarshal(data, &r); err == nil && strings.EqualFold(r.Name, name) {
-			return os.Remove(fp)
-		}
+	if found == "" {
+		return fmt.Errorf("no saved request named %q", name)
 	}
-	return fmt.Errorf("no saved request named %q", name)
+	if err := os.Remove(found); err != nil {
+		return err
+	}
+	pruneEmptyGroupDirs(dir, filepath.Dir(found))
+	return nil
 }
 
 // LoadEnvs returns all saved environments, sorted by name.

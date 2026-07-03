@@ -12,8 +12,8 @@ import (
 func TestSlug(t *testing.T) {
 	cases := map[string]string{
 		"Get User (v2)": "get-user-v2",
-		"  spaced  ":     "spaced",
-		"":                "request",
+		"  spaced  ":    "spaced",
+		"":              "request",
 	}
 	for in, want := range cases {
 		if got := slug(in); got != want {
@@ -26,7 +26,7 @@ func TestRequestSaveLoadRenameDelete(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	req := model.Request{Name: "My Request", Method: "GET", URL: "https://example.com"}
-	if err := SaveRequest(req, ""); err != nil {
+	if err := SaveRequest(req, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 
@@ -41,7 +41,7 @@ func TestRequestSaveLoadRenameDelete(t *testing.T) {
 	// Rename should remove the old file.
 	renamed := req
 	renamed.Name = "Renamed Request"
-	if err := SaveRequest(renamed, req.Name); err != nil {
+	if err := SaveRequest(renamed, req.Name, req.Group); err != nil {
 		t.Fatalf("SaveRequest (rename): %v", err)
 	}
 	if _, err := LoadRequest("My Request"); err == nil {
@@ -65,11 +65,114 @@ func TestRequestSaveLoadRenameDelete(t *testing.T) {
 		t.Errorf("LoadRequest fallback by content: %v", err)
 	}
 
-	if err := DeleteRequest("Renamed Request"); err != nil {
+	if err := DeleteRequest("", "Renamed Request"); err != nil {
 		t.Fatalf("DeleteRequest: %v", err)
 	}
 	if _, err := LoadRequest("Renamed Request"); err == nil {
 		t.Errorf("expected request to be deleted")
+	}
+}
+
+func TestRequestGroupedSaveMoveDelete(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	req := model.Request{Name: "Login", Group: "auth", Method: "POST", URL: "https://example.com/login"}
+	if err := SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	dir, _ := RequestsDir()
+	if _, err := os.Stat(filepath.Join(dir, "auth", "login.yaml")); err != nil {
+		t.Fatalf("expected file at requests/auth/login.yaml: %v", err)
+	}
+
+	got, err := LoadRequest("auth/Login")
+	if err != nil {
+		t.Fatalf("LoadRequest(\"auth/Login\"): %v", err)
+	}
+	if got.Group != "auth" || got.Name != "Login" {
+		t.Errorf("LoadRequest = %+v, want Group=auth Name=Login", got)
+	}
+
+	// Moving to a different folder should remove the old file and create
+	// the new one; the vacated "auth" directory should be pruned since it
+	// becomes empty.
+	moved := req
+	moved.Group = "identity/auth"
+	if err := SaveRequest(moved, req.Name, req.Group); err != nil {
+		t.Fatalf("SaveRequest (move): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "auth")); !os.IsNotExist(err) {
+		t.Errorf("expected old group dir \"auth\" to be pruned, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "identity", "auth", "login.yaml")); err != nil {
+		t.Fatalf("expected file at requests/identity/auth/login.yaml: %v", err)
+	}
+	if _, err := LoadRequest("auth/Login"); err == nil {
+		t.Errorf("expected old group path to be gone after move")
+	}
+
+	if err := DeleteRequest("identity/auth", "Login"); err != nil {
+		t.Fatalf("DeleteRequest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "identity")); !os.IsNotExist(err) {
+		t.Errorf("expected now-empty ancestor group dirs to be pruned, stat err = %v", err)
+	}
+}
+
+func TestLoadRequestBareNameAmbiguousAcrossGroups(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveRequest(model.Request{Name: "Login", Group: "auth", Method: "GET", URL: "https://example.com/a"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	if err := SaveRequest(model.Request{Name: "Login", Group: "legacy", Method: "GET", URL: "https://example.com/b"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	if _, err := LoadRequest("Login"); err == nil {
+		t.Errorf("expected an ambiguity error for a bare name saved in two groups")
+	}
+
+	// The full "group/name" path is unambiguous.
+	got, err := LoadRequest("legacy/Login")
+	if err != nil {
+		t.Fatalf("LoadRequest(\"legacy/Login\"): %v", err)
+	}
+	if got.URL != "https://example.com/b" {
+		t.Errorf("LoadRequest(\"legacy/Login\").URL = %q, want %q", got.URL, "https://example.com/b")
+	}
+}
+
+func TestLoadRequestsGroupReflectsDirectoryNotStoredField(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveRequest(model.Request{Name: "Ping", Group: "auth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	// Hand-edit the file's own "group" field so it disagrees with the
+	// directory it's actually stored in; the directory should win.
+	dir, _ := RequestsDir()
+	path := filepath.Join(dir, "auth", "ping.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	stale := strings.Replace(string(data), "group: auth", "group: somewhere-else", 1)
+	if stale == string(data) {
+		t.Fatalf("test setup: expected to find \"group: auth\" in %s", path)
+	}
+	if err := os.WriteFile(path, []byte(stale), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	reqs, err := LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	if len(reqs) != 1 || reqs[0].Group != "auth" {
+		t.Errorf("LoadRequests() = %+v, want a single request with Group \"auth\"", reqs)
 	}
 }
 
@@ -171,7 +274,7 @@ func TestLoadRequestUnknown(t *testing.T) {
 func TestDeleteRequestUnknown(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	if err := DeleteRequest("nope"); err == nil {
+	if err := DeleteRequest("", "nope"); err == nil {
 		t.Errorf("expected error deleting unknown request")
 	}
 }
@@ -192,7 +295,7 @@ func TestLoadRequestsSortedCaseInsensitive(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	for _, name := range []string{"banana", "Apple", "cherry"} {
-		if err := SaveRequest(model.Request{Name: name, Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		if err := SaveRequest(model.Request{Name: name, Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 			t.Fatalf("SaveRequest(%q): %v", name, err)
 		}
 	}
@@ -258,14 +361,112 @@ func TestBaseDirHonorsXDGConfigHome(t *testing.T) {
 	}
 }
 
-func TestBaseDirFallsBackToHomeConfig(t *testing.T) {
+// chdirTemp changes the working directory to a fresh temp dir for the
+// rest of the test, restoring the original directory afterward, and
+// returns the *resolved* path to that directory (i.e. what os.Getwd will
+// itself report from inside it — on macOS that's the /private/... form,
+// which can differ from t.TempDir()'s own return value once symlinks are
+// resolved). Used to isolate tests exercising BaseDir's project-local
+// ".terman" discovery and cwd-relative default, neither of which the
+// other tests in this file (which all pin $XDG_CONFIG_HOME, the
+// highest-priority override) depend on.
+func chdirTemp(t *testing.T) string {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	return cwd
+}
+
+func TestBaseDirFallsBackToHomeConfigWhenItExists(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t) // no ".terman" anywhere above this directory
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, ".config", "terman")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	dir, err := BaseDir()
 	if err != nil {
 		t.Fatalf("BaseDir: %v", err)
 	}
-	if !strings.HasSuffix(dir, filepath.Join(".config", "terman")) {
-		t.Errorf("BaseDir() = %q, want suffix %q", dir, filepath.Join(".config", "terman"))
+	if dir != legacy {
+		t.Errorf("BaseDir() = %q, want %q", dir, legacy)
+	}
+}
+
+func TestBaseDirDefaultsToLocalWhenNothingExists(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cwd := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir()) // no ~/.config/terman here
+
+	dir, err := BaseDir()
+	if err != nil {
+		t.Fatalf("BaseDir: %v", err)
+	}
+	want := filepath.Join(cwd, ".terman")
+	if dir != want {
+		t.Errorf("BaseDir() = %q, want %q", dir, want)
+	}
+}
+
+func TestBaseDirFindsLocalTermanInParentDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	root := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	local := filepath.Join(root, ".terman")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	dir, err := BaseDir()
+	if err != nil {
+		t.Fatalf("BaseDir: %v", err)
+	}
+	if dir != local {
+		t.Errorf("BaseDir() = %q, want %q (found by walking up from %q)", dir, local, sub)
+	}
+}
+
+func TestBaseDirPrefersLocalTermanOverLegacyHomeConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	root := chdirTemp(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".config", "terman"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	local := filepath.Join(root, ".terman")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	dir, err := BaseDir()
+	if err != nil {
+		t.Fatalf("BaseDir: %v", err)
+	}
+	if dir != local {
+		t.Errorf("BaseDir() = %q, want local %q (should be preferred over the legacy home config)", dir, local)
 	}
 }

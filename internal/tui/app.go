@@ -154,7 +154,7 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q":
 			return m, tea.Quit
 		case "n":
-			m.editor.loadNew()
+			m.editor.loadNew(m.list.curGroup)
 			m.screen = screenEditor
 			return m, nil
 		case "e":
@@ -165,7 +165,7 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "d":
 			if req, ok := m.list.selected(); ok {
-				_ = store.DeleteRequest(req.Name)
+				_ = store.DeleteRequest(req.Group, req.Name)
 				_ = m.list.refresh()
 			}
 			return m, nil
@@ -182,16 +182,26 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenCurlImport
 			return m, nil
 		case "enter":
+			if name, ok := m.list.selectedFolder(); ok {
+				m.list.openFolder(name)
+				return m, nil
+			}
 			if req, ok := m.list.selected(); ok {
 				spinCmd := m.response.showRunning(req.Name)
 				m.screen = screenResponse
 				return m, tea.Batch(spinCmd, runRequestCmd(req, m.activeEnvVars()))
 			}
 			return m, nil
+		case "esc", "backspace":
+			if !m.list.filtered() && m.list.goUp() {
+				return m, nil
+			}
+			// Otherwise (already at the top level, or a filter is active)
+			// fall through to the list widget's own handling below, e.g.
+			// clearing an applied filter.
 		}
 	}
-	var cmd tea.Cmd
-	m.list.lst, cmd = m.list.lst.Update(msg)
+	cmd := m.list.handleKey(msg)
 	return m, cmd
 }
 
@@ -208,7 +218,7 @@ func (m appModel) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.editor.err = "name is required"
 				return m, nil
 			}
-			if err := store.SaveRequest(req, m.editor.prevName); err != nil {
+			if err := store.SaveRequest(req, m.editor.prevName, m.editor.prevGroup); err != nil {
 				m.editor.err = err.Error()
 				return m, nil
 			}

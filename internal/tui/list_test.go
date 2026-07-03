@@ -20,8 +20,50 @@ func TestRequestItemAccessors(t *testing.T) {
 	if item.Description() != "GET  https://example.com/widgets" {
 		t.Errorf("Description() = %q, want %q", item.Description(), "GET  https://example.com/widgets")
 	}
-	if item.FilterValue() != "Get Widget" {
-		t.Errorf("FilterValue() = %q, want %q", item.FilterValue(), "Get Widget")
+	if want := "Get Widget GET https://example.com/widgets"; item.FilterValue() != want {
+		t.Errorf("FilterValue() = %q, want %q", item.FilterValue(), want)
+	}
+}
+
+func TestRequestItemDescriptionShowsGroupWhenSearching(t *testing.T) {
+	item := requestItem{
+		req:       model.Request{Name: "Login", Group: "auth", Method: "POST", URL: "https://example.com/login"},
+		showGroup: true,
+	}
+	if want := "auth  •  POST  https://example.com/login"; item.Description() != want {
+		t.Errorf("Description() = %q, want %q", item.Description(), want)
+	}
+	if want := "Login POST https://example.com/login auth"; item.FilterValue() != want {
+		t.Errorf("FilterValue() = %q, want %q", item.FilterValue(), want)
+	}
+}
+
+func TestChildItemsGroupsSubfoldersAboveRequests(t *testing.T) {
+	all := []model.Request{
+		{Name: "Health", Method: "GET", URL: "https://example.com/health"},
+		{Name: "Login", Group: "auth", Method: "POST", URL: "https://example.com/login"},
+		{Name: "Refresh", Group: "auth", Method: "POST", URL: "https://example.com/refresh"},
+		{Name: "OAuth Start", Group: "auth/oauth", Method: "GET", URL: "https://example.com/oauth"},
+	}
+
+	top := childItems(all, "")
+	if len(top) != 2 {
+		t.Fatalf("top-level items = %d, want 2 (1 folder + 1 request)", len(top))
+	}
+	folder, ok := top[0].(folderItem)
+	if !ok || folder.name != "auth" || folder.count != 3 {
+		t.Errorf("top[0] = %+v, want folderItem{name: auth, count: 3}", top[0])
+	}
+	if _, ok := top[1].(requestItem); !ok {
+		t.Errorf("top[1] = %T, want requestItem", top[1])
+	}
+
+	inAuth := childItems(all, "auth")
+	if len(inAuth) != 3 {
+		t.Fatalf("items in \"auth\" = %d, want 3 (1 folder + 2 requests)", len(inAuth))
+	}
+	if f, ok := inAuth[0].(folderItem); !ok || f.name != "oauth" || f.count != 1 {
+		t.Errorf("inAuth[0] = %+v, want folderItem{name: oauth, count: 1}", inAuth[0])
 	}
 }
 
@@ -37,7 +79,7 @@ func TestNewListScreenAndRefresh(t *testing.T) {
 	}
 
 	req := model.Request{Name: "New Req", Method: "GET", URL: "https://example.com"}
-	if err := store.SaveRequest(req, ""); err != nil {
+	if err := store.SaveRequest(req, "", ""); err != nil {
 		t.Fatalf("save request: %v", err)
 	}
 
@@ -60,7 +102,7 @@ func TestNewListScreenAndRefresh(t *testing.T) {
 func TestListScreenSelected(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	if err := store.SaveRequest(model.Request{Name: "Only Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+	if err := store.SaveRequest(model.Request{Name: "Only Req", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 		t.Fatalf("save request: %v", err)
 	}
 

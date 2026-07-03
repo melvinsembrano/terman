@@ -127,9 +127,9 @@ func TestEditorScreenSetFocusWraps(t *testing.T) {
 
 func TestEditorScreenLoadNewResetsForm(t *testing.T) {
 	s := newEditorScreen()
-	s.loadRequest(model.Request{Name: "Old", Method: "POST", URL: "https://old.example.com"})
+	s.loadRequest(model.Request{Name: "Old", Group: "auth", Method: "POST", URL: "https://old.example.com"})
 
-	s.loadNew()
+	s.loadNew("")
 
 	if s.prevName != "" {
 		t.Errorf("prevName after loadNew = %q, want empty", s.prevName)
@@ -137,7 +137,54 @@ func TestEditorScreenLoadNewResetsForm(t *testing.T) {
 	if s.name.Value() != "" {
 		t.Errorf("name value after loadNew = %q, want empty", s.name.Value())
 	}
+	if s.group.Value() != "" {
+		t.Errorf("group value after loadNew(\"\") = %q, want empty", s.group.Value())
+	}
 	if s.methodIdx != methodIndex("GET") {
 		t.Errorf("methodIdx after loadNew = %d, want %d", s.methodIdx, methodIndex("GET"))
+	}
+}
+
+func TestEditorScreenLoadNewDefaultsGroup(t *testing.T) {
+	s := newEditorScreen()
+	s.loadNew("auth/oauth")
+
+	if s.group.Value() != "auth/oauth" {
+		t.Errorf("group value after loadNew(\"auth/oauth\") = %q, want %q", s.group.Value(), "auth/oauth")
+	}
+	req := s.toRequest()
+	if req.Group != "auth/oauth" {
+		t.Errorf("toRequest().Group = %q, want %q", req.Group, "auth/oauth")
+	}
+}
+
+func TestEditorScreenLoadRequestRoundTripsGroup(t *testing.T) {
+	original := model.Request{Name: "Login", Group: "auth", Method: "POST", URL: "https://example.com/login"}
+
+	s := newEditorScreen()
+	s.loadRequest(original)
+
+	if s.prevGroup != "auth" {
+		t.Errorf("prevGroup = %q, want %q", s.prevGroup, "auth")
+	}
+	if got := s.toRequest().Group; got != "auth" {
+		t.Errorf("toRequest().Group = %q, want %q", got, "auth")
+	}
+}
+
+func TestNormalizeGroupInput(t *testing.T) {
+	cases := map[string]string{
+		"":               "",
+		"  ":             "",
+		"auth":           "auth",
+		"/auth/":         "auth",
+		"auth//oauth":    "auth/oauth",
+		" auth / oauth ": "auth/oauth",
+		`auth\oauth`:     "auth/oauth",
+	}
+	for in, want := range cases {
+		if got := normalizeGroupInput(in); got != want {
+			t.Errorf("normalizeGroupInput(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

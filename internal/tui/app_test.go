@@ -585,7 +585,7 @@ func newAppModelWithRequests(t *testing.T, names ...string) appModel {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	for _, n := range names {
-		if err := store.SaveRequest(model.Request{Name: n, Method: "GET", URL: "https://example.com"}, ""); err != nil {
+		if err := store.SaveRequest(model.Request{Name: n, Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 			t.Fatalf("SaveRequest(%q): %v", n, err)
 		}
 	}
@@ -716,5 +716,180 @@ func TestToggleMouseKey(t *testing.T) {
 	}
 	if strings.Contains(am2.View(), "mouse: off") {
 		t.Errorf("View() still shows the mouse-off indicator after re-enabling, got:\n%s", am2.View())
+	}
+}
+
+func pressKey(t *testing.T, m appModel, k string) appModel {
+	t.Helper()
+	updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateList returned %T, want appModel", updated)
+	}
+	return am
+}
+
+func pressSpecialKey(t *testing.T, m appModel, typ tea.KeyType) appModel {
+	t.Helper()
+	updated, _ := m.updateList(tea.KeyMsg{Type: typ})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateList returned %T, want appModel", updated)
+	}
+	return am
+}
+
+func TestListEnterOpensFolderThenRequest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Login", Group: "auth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	// At the top level, the only item is the "auth" folder.
+	if _, ok := m.list.selected(); ok {
+		t.Fatalf("expected no selected request at the top level")
+	}
+	name, ok := m.list.selectedFolder()
+	if !ok || name != "auth" {
+		t.Fatalf("selectedFolder() = %q, %v, want \"auth\", true", name, ok)
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEnter)
+	if m.list.curGroup != "auth" {
+		t.Fatalf("curGroup after entering folder = %q, want %q", m.list.curGroup, "auth")
+	}
+	req, ok := m.list.selected()
+	if !ok || req.Name != "Login" {
+		t.Fatalf("selected() inside auth/ = %+v, %v, want Login", req, ok)
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEnter)
+	if m.screen != screenResponse {
+		t.Errorf("screen after entering a request = %v, want screenResponse", m.screen)
+	}
+}
+
+func TestListEscGoesUpAFolder(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "OAuth", Group: "auth/oauth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEnter) // -> auth
+	m = pressSpecialKey(t, m, tea.KeyEnter) // -> auth/oauth
+	if m.list.curGroup != "auth/oauth" {
+		t.Fatalf("curGroup = %q, want %q", m.list.curGroup, "auth/oauth")
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEsc)
+	if m.list.curGroup != "auth" {
+		t.Fatalf("curGroup after esc = %q, want %q", m.list.curGroup, "auth")
+	}
+	m = pressSpecialKey(t, m, tea.KeyEsc)
+	if m.list.curGroup != "" {
+		t.Fatalf("curGroup after second esc = %q, want top level", m.list.curGroup)
+	}
+	// Esc at the top level is a no-op, not a quit.
+	m = pressSpecialKey(t, m, tea.KeyEsc)
+	if m.screen != screenList {
+		t.Errorf("esc at the top level changed screen to %v, want screenList", m.screen)
+	}
+}
+
+func TestPressNDefaultsNewRequestToCurrentFolder(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Login", Group: "auth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEnter) // descend into auth
+	m = pressKey(t, m, "n")
+	if m.screen != screenEditor {
+		t.Fatalf("screen after \"n\" = %v, want screenEditor", m.screen)
+	}
+	if got := m.editor.group.Value(); got != "auth" {
+		t.Errorf("new request's default folder = %q, want %q", got, "auth")
+	}
+}
+
+// TestListSearchShowsResultsAcrossAllGroups checks the view-swapping logic
+// that backs search: entering the list's own "/" filter should widen the
+// underlying item pool from the current folder to every request across
+// every group, so a request nested several folders deep is reachable
+// without navigating there first. bubbles/list's own fuzzy-matching (which
+// runs asynchronously, via a tea.Cmd) is exercised by its own test suite,
+// not re-tested here — this only checks list.Model.Items(), the
+// synchronously-set underlying pool, not the async-filtered subset.
+func TestListSearchShowsResultsAcrossAllGroups(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Login", Group: "auth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	if err := store.SaveRequest(model.Request{Name: "Health", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	// At the top level, browsing shows the "auth" folder plus "Health";
+	// "Login" (nested inside auth/) isn't directly visible yet.
+	if len(m.list.lst.Items()) != 2 {
+		t.Fatalf("top-level items = %d, want 2 (1 folder + 1 request)", len(m.list.lst.Items()))
+	}
+
+	m = pressKey(t, m, "/")
+	items := m.list.lst.Items()
+	if len(items) != 2 {
+		t.Fatalf("items while filtering = %d, want 2 (every request across every group)", len(items))
+	}
+	foundLogin := false
+	for _, it := range items {
+		if ri, ok := it.(requestItem); ok && ri.req.Name == "Login" {
+			foundLogin = true
+		}
+	}
+	if !foundLogin {
+		t.Errorf("items while filtering = %+v, want to include the nested \"Login\" request", items)
+	}
+
+	// Clearing the filter should restore the top-level folder view.
+	m = pressSpecialKey(t, m, tea.KeyEsc)
+	if len(m.list.lst.Items()) != 2 {
+		t.Fatalf("items after clearing filter = %d, want 2 (the auth folder + Health)", len(m.list.lst.Items()))
+	}
+	if _, ok := m.list.selectedFolder(); !ok {
+		t.Errorf("expected the top-level folder view to be restored after clearing the filter")
+	}
+}
+
+func TestPressDDeletesFromCorrectGroup(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveRequest(model.Request{Name: "Login", Group: "auth", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	m = pressSpecialKey(t, m, tea.KeyEnter) // descend into auth
+	m = pressKey(t, m, "d")
+
+	if _, err := store.LoadRequest("auth/Login"); err == nil {
+		t.Errorf("expected request to be deleted")
 	}
 }

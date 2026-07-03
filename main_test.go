@@ -129,7 +129,7 @@ func TestCmdListNoRequests(t *testing.T) {
 
 func TestCmdListShowsSavedRequests(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveRequest(model.Request{Name: "Get Widget", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+	if err := store.SaveRequest(model.Request{Name: "Get Widget", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 
@@ -492,7 +492,7 @@ func TestCmdRunUnknownRequest(t *testing.T) {
 
 func TestCmdRunInvalidVarFlag(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 	if err := cmdRun([]string{"Req", "--var", "badformat"}); err == nil {
@@ -502,7 +502,7 @@ func TestCmdRunInvalidVarFlag(t *testing.T) {
 
 func TestCmdRunUnknownEnvFlag(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 	if err := cmdRun([]string{"Req", "--env", "nope"}); err == nil {
@@ -531,7 +531,7 @@ func TestCmdRunSuccess(t *testing.T) {
 		Name:   "Ping",
 		Method: "GET",
 		URL:    "{{base_url}}/ping?msg={{msg}}",
-	}, ""); err != nil {
+	}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 
@@ -574,7 +574,7 @@ func TestCmdRunEnvFilePrecedence(t *testing.T) {
 		Name:   "Ping",
 		Method: "GET",
 		URL:    "{{base_url}}/ping?msg={{msg}}&token={{token}}",
-	}, ""); err != nil {
+	}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 
@@ -597,7 +597,7 @@ func TestCmdRunEnvFilePrecedence(t *testing.T) {
 
 func TestCmdRunEnvFileMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, ""); err != nil {
+	if err := store.SaveRequest(model.Request{Name: "Req", Method: "GET", URL: "https://example.com"}, "", ""); err != nil {
 		t.Fatalf("SaveRequest: %v", err)
 	}
 	if err := cmdRun([]string{"Req", "--env-file", filepath.Join(t.TempDir(), "nope.env")}); err == nil {

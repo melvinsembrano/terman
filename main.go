@@ -78,6 +78,10 @@ Usage:
   terman version                        Show version information
   terman help                           Show this help
 
+<name> above may be a bare request name or a "group/name" path (requests
+can be organized into folders, e.g. "terman run auth/login"); "terman
+list" shows each request's full path.
+
 Flags for "run":
   --env <name>       Use this environment instead of the active one
   --env-file <path>  Load extra variables from a .env file for this run only (not saved)
@@ -85,7 +89,13 @@ Flags for "run":
   -i                 Also print response headers
 
 "import curl" reads the curl command from <file> if given, otherwise from
-stdin (e.g. "pbpaste | terman import curl \"Get Users\"").
+stdin (e.g. "pbpaste | terman import curl \"Get Users\"" or
+"pbpaste | terman import curl \"auth/Login\"" to save it into a folder).
+
+Data is stored in ./.terman if that directory (searched for in the current
+directory and its parents) already exists, otherwise in the legacy
+~/.config/terman if that exists, otherwise a fresh ./.terman is created in
+the current directory. Set $XDG_CONFIG_HOME to override this explicitly.
 `)
 }
 
@@ -215,7 +225,7 @@ func cmdList(args []string) error {
 		return nil
 	}
 	for _, r := range reqs {
-		fmt.Printf("%-24s %-6s %s\n", r.Name, r.Method, r.URL)
+		fmt.Printf("%-24s %-6s %s\n", store.FullPath(r), r.Method, r.URL)
 	}
 	return nil
 }
@@ -365,13 +375,13 @@ func cmdImportCurl(args []string) error {
 	if err != nil {
 		return err
 	}
-	req.Name = name
+	req.Group, req.Name = store.SplitGroupName(name)
 
-	if err := store.SaveRequest(req, ""); err != nil {
+	if err := store.SaveRequest(req, "", ""); err != nil {
 		return err
 	}
 
-	fmt.Printf("Imported %q: %s %s", req.Name, req.Method, req.URL)
+	fmt.Printf("Imported %q: %s %s", store.FullPath(req), req.Method, req.URL)
 	if n := len(req.Headers); n > 0 {
 		if n == 1 {
 			fmt.Print(" (1 header)")
