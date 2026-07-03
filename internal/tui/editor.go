@@ -190,6 +190,12 @@ func (s editorScreen) Update(msg tea.Msg) (editorScreen, tea.Cmd) {
 func (s editorScreen) View() string {
 	var b strings.Builder
 
+	title := "New Request"
+	if s.prevName != "" {
+		title = "Edit Request"
+	}
+	b.WriteString(titleStyle.Render(title) + "\n\n")
+
 	method := methods[s.methodIdx]
 	if s.focus == focusMethod {
 		b.WriteString(labelStyle.Render("Method: ") + focusedStyle.Render("◀ "+method+" ▶") + "\n\n")
@@ -205,6 +211,11 @@ func (s editorScreen) View() string {
 	if s.err != "" {
 		b.WriteString(errorStyle.Render("error: "+s.err) + "\n\n")
 	}
-	b.WriteString(helpStyle.Render("tab/shift+tab move field • ←/→ change method • ctrl+s save • esc cancel"))
+	b.WriteString(renderHints(
+		keyHint{"tab/shift+tab", "move field"},
+		keyHint{"←/→", "change method"},
+		keyHint{"ctrl+s", "save"},
+		keyHint{"esc", "cancel"},
+	))
 	return b.String()
 }

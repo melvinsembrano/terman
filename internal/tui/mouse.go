@@ -7,9 +7,9 @@ import (
 
 // listContentTop is the fixed number of lines before a list.Model's items
 // begin, for the two list.Model-based screens in this app: terman's own
-// 2-line header (headerLines) plus the list's own title block, which is
-// always exactly 2 lines (a 1-line Title plus TitleBar's default bottom
-// padding line) for our short, non-wrapping titles. This depends on
+// header (headerLines) plus the list's own title block, which is always
+// exactly 2 lines (a 1-line Title plus TitleBar's default bottom padding
+// line) for our short, non-wrapping titles. This depends on
 // bubbles@v0.18.0's default TitleBar styling and on the status bar and
 // pagination indicator being turned off (see newListScreen/
 // newEnvListScreen, and the note in AGENTS.md) — re-verify if that

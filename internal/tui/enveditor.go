@@ -375,6 +375,12 @@ func (s envEditorScreen) Update(msg tea.Msg) (envEditorScreen, tea.Cmd) {
 func (s envEditorScreen) View() string {
 	var b strings.Builder
 
+	title := "New Environment"
+	if s.prevName != "" {
+		title = "Edit Environment"
+	}
+	b.WriteString(titleStyle.Render(title) + "\n\n")
+
 	nameLabel := labelStyle.Render("Name")
 	if s.sessionOnly {
 		nameLabel += "  " + subtleStyle.Render("(session — not saved to disk)")
@@ -399,7 +405,11 @@ func (s envEditorScreen) View() string {
 		b.WriteString(labelStyle.Render("Edit variable") + "\n")
 		b.WriteString("Key:   " + s.keyInput.View() + "\n")
 		b.WriteString("Value: " + s.valInput.View() + "\n\n")
-		b.WriteString(helpStyle.Render("tab switch field • enter save • esc cancel"))
+		b.WriteString(renderHints(
+			keyHint{"tab", "switch field"},
+			keyHint{"enter", "save"},
+			keyHint{"esc", "cancel"},
+		))
 		return b.String()
 	}
 
@@ -409,13 +419,25 @@ func (s envEditorScreen) View() string {
 		if s.importErr != "" {
 			b.WriteString(errorStyle.Render("error: "+s.importErr) + "\n\n")
 		}
-		b.WriteString(helpStyle.Render("enter import • esc cancel"))
+		b.WriteString(renderHints(
+			keyHint{"enter", "import"},
+			keyHint{"esc", "cancel"},
+		))
 		return b.String()
 	}
 
 	if s.err != "" {
 		b.WriteString(errorStyle.Render("error: "+s.err) + "\n\n")
 	}
-	b.WriteString(helpStyle.Render("tab move field • ↑/↓ select row • a add • i import • enter edit row • d delete row • ctrl+s save • esc cancel"))
+	b.WriteString(renderHints(
+		keyHint{"tab", "move field"},
+		keyHint{"↑/↓", "select row"},
+		keyHint{"a", "add"},
+		keyHint{"i", "import"},
+		keyHint{"enter", "edit row"},
+		keyHint{"d", "delete row"},
+		keyHint{"ctrl+s", "save"},
+		keyHint{"esc", "cancel"},
+	))
 	return b.String()
 }

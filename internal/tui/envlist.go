@@ -76,7 +76,7 @@ func envItems(envs []model.Environment, active string, sessionEnvs map[string]bo
 }
 
 func newEnvListScreen(envs []model.Environment, active string, sessionEnvs map[string]bool) envListScreen {
-	delegate := list.NewDefaultDelegate()
+	delegate := newStyledDelegate()
 	lst := list.New(envItems(envs, active, sessionEnvs), delegate, 0, 0)
 	lst.Title = "Environments"
 	lst.SetShowHelp(true)
@@ -87,6 +87,7 @@ func newEnvListScreen(envs []model.Environment, active string, sessionEnvs map[s
 	lst.SetShowPagination(false)
 	lst.AdditionalShortHelpKeys = envListHelpKeys
 	lst.AdditionalFullHelpKeys = envListHelpKeys
+	styleListHelp(&lst)
 	return envListScreen{lst: lst, delegate: delegate}
 }
 

@@ -113,11 +113,16 @@ func (s curlImportScreen) Update(msg tea.Msg) (curlImportScreen, tea.Cmd) {
 
 func (s curlImportScreen) View() string {
 	var b strings.Builder
+	b.WriteString(titleStyle.Render("Import from curl") + "\n\n")
 	b.WriteString(labelStyle.Render("Name") + "\n" + s.name.View() + "\n\n")
 	b.WriteString(labelStyle.Render("curl command (paste below)") + "\n" + s.cmd.View() + "\n\n")
 	if s.err != "" {
 		b.WriteString(errorStyle.Render("error: "+s.err) + "\n\n")
 	}
-	b.WriteString(helpStyle.Render("tab move field • ctrl+s parse & continue • esc cancel"))
+	b.WriteString(renderHints(
+		keyHint{"tab", "move field"},
+		keyHint{"ctrl+s", "parse & continue"},
+		keyHint{"esc", "cancel"},
+	))
 	return b.String()
 }

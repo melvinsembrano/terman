@@ -56,7 +56,7 @@ func newListScreen() (listScreen, error) {
 	if err != nil {
 		return listScreen{}, err
 	}
-	delegate := list.NewDefaultDelegate()
+	delegate := newStyledDelegate()
 	lst := list.New(items, delegate, 0, 0)
 	lst.Title = "Saved Requests"
 	lst.SetShowHelp(true)
@@ -67,6 +67,7 @@ func newListScreen() (listScreen, error) {
 	lst.SetShowPagination(false)
 	lst.AdditionalShortHelpKeys = listHelpKeys
 	lst.AdditionalFullHelpKeys = listHelpKeys
+	styleListHelp(&lst)
 	return listScreen{lst: lst, delegate: delegate}, nil
 }
 

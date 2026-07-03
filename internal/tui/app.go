@@ -22,9 +22,10 @@ const (
 	screenCurlImport
 )
 
-// headerLines is how many rows the header (title/env line + blank line)
-// consumes, subtracted from the terminal height before sizing screens.
-const headerLines = 2
+// headerLines is how many rows the header (title/env line, divider, blank
+// line) consumes, subtracted from the terminal height before sizing
+// screens.
+const headerLines = 3
 
 type appModel struct {
 	screen screen
@@ -495,16 +496,22 @@ func (m appModel) activeEnvVars() map[string]string {
 }
 
 func (m appModel) View() string {
-	env := m.activeEnv
-	if env == "" {
-		env = "none"
+	envLabel := subtleStyle.Render("env: ")
+	if m.activeEnv == "" {
+		envLabel += subtleStyle.Render("none")
+	} else {
+		envLabel += statusOKStyle.Render(m.activeEnv)
 	}
 	header := titleStyle.Render("terman") + " " + subtleStyle.Render("v"+version.Version) +
-		"  " + subtleStyle.Render("env: "+env)
+		subtleStyle.Render("  •  ") + envLabel
 	if !m.mouseEnabled {
-		header += "  " + subtleStyle.Render("mouse: off")
+		header += subtleStyle.Render("  •  mouse: off")
 	}
-	header += "\n\n"
+	header += "\n"
+	if m.width > 0 {
+		header += dividerStyle.Render(strings.Repeat("─", m.width))
+	}
+	header += "\n"
 
 	switch m.screen {
 	case screenList:

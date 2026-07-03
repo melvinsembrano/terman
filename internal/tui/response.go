@@ -369,12 +369,12 @@ func (s responseScreen) View() string {
 	if s.running {
 		return titleStyle.Render(s.title) + "\n\n" +
 			s.spinner.View() + " " + subtleStyle.Render("sending request…") + "\n\n" +
-			helpStyle.Render("esc back")
+			renderHints(keyHint{"esc", "back"})
 	}
-	help := "↑/↓ pgup/pgdn scroll"
+	hints := []keyHint{{"↑/↓ pgup/pgdn", "scroll"}}
 	if s.isJSON {
-		help += " • click to select • enter/space fold"
+		hints = append(hints, keyHint{"click", "select"}, keyHint{"enter/space", "fold"})
 	}
-	help += " • esc back"
-	return titleStyle.Render(s.title) + "\n\n" + s.vp.View() + "\n" + helpStyle.Render(help)
+	hints = append(hints, keyHint{"esc", "back"})
+	return titleStyle.Render(s.title) + "\n\n" + s.vp.View() + "\n" + renderHints(hints...)
 }
