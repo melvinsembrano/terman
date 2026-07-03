@@ -24,16 +24,18 @@ are the full verification bar for this repo.
 
 ## Code layout
 
-- `main.go` — CLI dispatch (`run`, `list`, `env ...`) and the no-args TUI
-  entry point.
+- `main.go` — CLI dispatch (`run`, `list`, `env ...`, `import ...`) and the
+  no-args TUI entry point.
 - `internal/model` — persisted data structs (`Request`, `Environment`).
 - `internal/store` — YAML persistence, one file per request/environment,
   under `$XDG_CONFIG_HOME/terman` (or `~/.config/terman`).
 - `internal/vars` — `{{var}}` substitution and layered `Merge`.
 - `internal/httpx` — builds/executes the HTTP request, formats the response.
 - `internal/dotenv` — a small, dependency-free `.env` file parser.
+- `internal/curl` — a small, dependency-free curl-command parser/tokenizer
+  used by "import curl" on both surfaces.
 - `internal/tui` — the Bubble Tea screens (request list/editor/response,
-  env list/editor) and the root `appModel`.
+  env list/editor, curl import) and the root `appModel`.
 
 ## Code style
 

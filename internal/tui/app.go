@@ -18,6 +18,7 @@ const (
 	screenResponse
 	screenEnvList
 	screenEnvEditor
+	screenCurlImport
 )
 
 // headerLines is how many rows the header (title/env line + blank line)
@@ -33,8 +34,9 @@ type appModel struct {
 	editor   editorScreen
 	response responseScreen
 
-	envList   envListScreen
-	envEditor envEditorScreen
+	envList    envListScreen
+	envEditor  envEditorScreen
+	curlImport curlImportScreen
 
 	activeEnv string
 	envs      []model.Environment
@@ -69,14 +71,15 @@ func newAppModel() (appModel, error) {
 		return appModel{}, err
 	}
 	return appModel{
-		screen:    screenList,
-		activeEnv: active,
-		envs:      envs,
-		list:      lst,
-		editor:    newEditorScreen(),
-		response:  newResponseScreen(),
-		envList:   newEnvListScreen(envs, active, nil),
-		envEditor: newEnvEditorScreen(),
+		screen:     screenList,
+		activeEnv:  active,
+		envs:       envs,
+		list:       lst,
+		editor:     newEditorScreen(),
+		response:   newResponseScreen(),
+		envList:    newEnvListScreen(envs, active, nil),
+		envEditor:  newEnvEditorScreen(),
+		curlImport: newCurlImportScreen(),
 	}, nil
 }
 
@@ -95,6 +98,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.response.setSize(msg.Width, bodyH)
 		m.envList.setSize(msg.Width, bodyH)
 		m.envEditor.setSize(msg.Width, bodyH)
+		m.curlImport.setSize(msg.Width, bodyH)
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -113,6 +117,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEnvList(msg)
 	case screenEnvEditor:
 		return m.updateEnvEditor(msg)
+	case screenCurlImport:
+		return m.updateCurlImport(msg)
 	}
 	return m, nil
 }
@@ -145,6 +151,10 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.reloadEnvs()
 			m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			m.screen = screenEnvList
+			return m, nil
+		case "I":
+			m.curlImport.loadNew()
+			m.screen = screenCurlImport
 			return m, nil
 		case "enter":
 			if req, ok := m.list.selected(); ok {
@@ -281,6 +291,30 @@ func (m appModel) updateEnvEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.envEditor, cmd = m.envEditor.Update(msg)
+	return m, cmd
+}
+
+func (m appModel) updateCurlImport(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.curlImport.err = ""
+			m.screen = screenList
+			return m, nil
+		case "ctrl+s":
+			req, err := m.curlImport.parse()
+			if err != nil {
+				m.curlImport.err = err.Error()
+				return m, nil
+			}
+			m.editor.loadRequest(req)
+			m.editor.prevName = "" // brand new request, not editing a saved one
+			m.screen = screenEditor
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.curlImport, cmd = m.curlImport.Update(msg)
 	return m, cmd
 }
 
@@ -444,6 +478,8 @@ func (m appModel) View() string {
 		return header + m.envList.View()
 	case screenEnvEditor:
 		return header + m.envEditor.View()
+	case screenCurlImport:
+		return header + m.curlImport.View()
 	}
 	return header
 }

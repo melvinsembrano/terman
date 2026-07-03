@@ -37,6 +37,26 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(out)
 }
 
+// withStdin runs fn with os.Stdin replaced by a pipe fed the given
+// content, restoring the original os.Stdin afterward.
+func withStdin(t *testing.T, content string, fn func()) {
+	t.Helper()
+	orig := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdin = r
+	defer func() { os.Stdin = orig }()
+
+	go func() {
+		_, _ = w.WriteString(content)
+		_ = w.Close()
+	}()
+
+	fn()
+}
+
 func TestStringSliceSetAppends(t *testing.T) {
 	var s stringSlice
 	if err := s.Set("a=1"); err != nil {
@@ -582,4 +602,88 @@ func TestCmdRunEnvFileMissing(t *testing.T) {
 	if err := cmdRun([]string{"Req", "--env-file", filepath.Join(t.TempDir(), "nope.env")}); err == nil {
 		t.Error("expected error for a missing --env-file")
 	}
+}
+
+func TestCmdImportCurlFromStdin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	out := ""
+	withStdin(t, `curl 'https://example.com/users' -H 'Accept: application/json' -d 'a=1'`, func() {
+		out = captureStdout(t, func() {
+			if err := cmdImport([]string{"curl", "Get Users"}); err != nil {
+				t.Fatalf("cmdImport: %v", err)
+			}
+		})
+	})
+
+	if !strings.Contains(out, `Imported "Get Users"`) || !strings.Contains(out, "POST") || !strings.Contains(out, "https://example.com/users") {
+		t.Errorf("cmdImport output = %q, missing expected fields", out)
+	}
+
+	req, err := store.LoadRequest("Get Users")
+	if err != nil {
+		t.Fatalf("LoadRequest: %v", err)
+	}
+	if req.Method != "POST" || req.URL != "https://example.com/users" || req.Body != "a=1" {
+		t.Errorf("saved request = %+v", req)
+	}
+	if req.Headers["Accept"] != "application/json" {
+		t.Errorf("saved Headers[Accept] = %q", req.Headers["Accept"])
+	}
+}
+
+func TestCmdImportCurlFromFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	path := filepath.Join(t.TempDir(), "curl.txt")
+	if err := os.WriteFile(path, []byte(`curl -X PUT 'https://example.com/widgets/1'`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	captureStdout(t, func() {
+		if err := cmdImport([]string{"curl", "Update Widget", path}); err != nil {
+			t.Fatalf("cmdImport: %v", err)
+		}
+	})
+
+	req, err := store.LoadRequest("Update Widget")
+	if err != nil {
+		t.Fatalf("LoadRequest: %v", err)
+	}
+	if req.Method != "PUT" || req.URL != "https://example.com/widgets/1" {
+		t.Errorf("saved request = %+v", req)
+	}
+}
+
+func TestCmdImportCurlMissingArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdImport(nil); err == nil {
+		t.Error("expected error for cmdImport with no args")
+	}
+	if err := cmdImport([]string{"curl"}); err == nil {
+		t.Error("expected error for import curl with no name")
+	}
+}
+
+func TestCmdImportUnknownSubcommand(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdImport([]string{"postman"}); err == nil {
+		t.Error("expected error for an unknown import subcommand")
+	}
+}
+
+func TestCmdImportCurlMissingFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdImport([]string{"curl", "Name", filepath.Join(t.TempDir(), "nope.txt")}); err == nil {
+		t.Error("expected error for a missing curl command file")
+	}
+}
+
+func TestCmdImportCurlInvalidCommand(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	withStdin(t, "curl -X GET", func() { // no URL
+		if err := cmdImport([]string{"curl", "Name"}); err == nil {
+			t.Error("expected error for a curl command with no URL")
+		}
+	})
 }

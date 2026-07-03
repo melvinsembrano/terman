@@ -47,6 +47,7 @@ terman
 | `d`      | delete the selected request    |
 | `E`      | cycle the active environment   |
 | `v`      | manage environments            |
+| `I`      | import a request from a curl command |
 | `/`      | filter                         |
 | `q`      | quit                            |
 
@@ -63,6 +64,16 @@ Headers are entered one per line as `Key: Value`. URL, headers, and body may
 reference environment variables as `{{name}}`.
 
 **Response screen:** `↑`/`↓`/page up/down to scroll, `esc` to go back.
+
+### Importing a request from curl
+
+Press `I` from the request list to paste in a curl command (a name field
+plus a multi-line box for the command). `ctrl+s` parses it and hands you
+off into the regular request editor — pre-filled with the method, URL,
+headers, and body it found — so you can review or tweak before saving with
+`ctrl+s` again. `esc` at either step discards it; nothing is saved until
+you save from the editor. See "Importing from curl" under CLI below for
+exactly what's understood.
 
 ### Managing environments
 
@@ -118,6 +129,8 @@ terman env import <file> <name>      # merge a .env file's variables into an env
 terman env unset <name> <key>...     # remove variables
 terman env delete <name>             # delete an environment
 terman env use <name>                # set the active environment
+
+terman import curl <name> [file]     # save a request parsed from a curl command
 ```
 
 `run` flags:
@@ -141,6 +154,45 @@ Exit code is non-zero if the request errors or the response status is not
 
 Deleting the currently active environment (`env delete`) resets the active
 environment to "none".
+
+### Importing from curl
+
+`terman import curl <name> [file]` reads a curl command from `file` if
+given, otherwise from stdin — so paste-friendly input works without
+fighting shell quoting:
+
+```sh
+pbpaste | terman import curl "Get Users"
+terman import curl "Get Users" < curl.txt
+terman import curl "Get Users" <<'EOF'
+curl 'https://api.example.com/users' \
+  -H 'Accept: application/json'
+EOF
+```
+
+It's saved immediately (like `env set`, no confirmation step) under the
+given name, overwriting any existing request with that name. The TUI's `I`
+key (above) does the same parsing but hands off into the editor for review
+before saving.
+
+Understood flags: `-X`/`--request`; `-H`/`--header` (repeatable);
+`-d`/`--data`/`--data-raw`/`--data-ascii`/`--data-binary`/`--data-urlencode`
+(repeatable, joined with `&`; implies method `POST` unless `-X` is given);
+`-u`/`--user` (→ a `Basic` auth `Authorization` header); `-G`/`--get`
+(moves the assembled data into the URL's query string instead of the
+body); `-A`/`--user-agent`; `-e`/`--referer`; `-b`/`--cookie`; `--url`.
+Both `--flag=value` and glued short forms (`-XPOST`, `-H'Accept: json'`)
+are understood, and a leading `curl` word is optional. Unrecognized flags
+are ignored rather than rejected — real-world curl commands (especially
+ones copied from browser devtools) are full of flags irrelevant to
+building the request, like `--compressed`, `-k`, `-s`, `-L`, or
+`--connect-timeout 5`.
+
+Known limitations (not supported): TLS options (`-k`/`--insecure` — TLS
+verification always stays on); `--compressed` is a deliberate no-op (Go's
+HTTP client already negotiates and transparently decompresses gzip by
+default, so translating it into a header would actually break that); file
+uploads (`-F`/`--form`, `@file` data); ANSI-C `$'...'` quoting.
 
 ### Loading `.env` files
 

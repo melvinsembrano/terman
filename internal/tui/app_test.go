@@ -467,3 +467,100 @@ func TestEnvEditorSaveBlockedWhileRowModalOpen(t *testing.T) {
 		t.Error("expected env NOT to be saved while the row modal is open")
 	}
 }
+
+func TestPressIOpensCurlImport(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("I")})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateList returned %T, want appModel", updated)
+	}
+	if am.screen != screenCurlImport {
+		t.Errorf("screen = %v, want screenCurlImport (%v)", am.screen, screenCurlImport)
+	}
+}
+
+func TestCurlImportEscReturnsToRequestList(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenCurlImport
+
+	updated, _ := m.updateCurlImport(tea.KeyMsg{Type: tea.KeyEsc})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateCurlImport returned %T, want appModel", updated)
+	}
+	if am.screen != screenList {
+		t.Errorf("screen = %v, want screenList (%v)", am.screen, screenList)
+	}
+}
+
+func TestCurlImportSuccessHandsOffToEditor(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenCurlImport
+	m.curlImport.loadNew()
+	m.curlImport.name.SetValue("Get Users")
+	m.curlImport.cmd.SetValue(`curl -X POST 'https://example.com/users' -H 'Accept: application/json' -d 'a=1'`)
+
+	updated, _ := m.updateCurlImport(tea.KeyMsg{Type: tea.KeyCtrlS})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateCurlImport returned %T, want appModel", updated)
+	}
+	if am.screen != screenEditor {
+		t.Fatalf("screen = %v, want screenEditor (%v)", am.screen, screenEditor)
+	}
+	if am.editor.prevName != "" {
+		t.Errorf("editor.prevName = %q, want empty (this is a new, unsaved request)", am.editor.prevName)
+	}
+
+	got := am.editor.toRequest()
+	if got.Method != "POST" || got.URL != "https://example.com/users" || got.Body != "a=1" {
+		t.Errorf("editor populated with = %+v", got)
+	}
+	if got.Headers["Accept"] != "application/json" {
+		t.Errorf("editor Headers[Accept] = %q", got.Headers["Accept"])
+	}
+
+	// Nothing should be saved to the store until the (unchanged) editor
+	// save flow runs.
+	if _, err := store.LoadRequest("Get Users"); err == nil {
+		t.Error("expected the imported request NOT to be saved yet")
+	}
+}
+
+func TestCurlImportParseErrorStaysOnScreen(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenCurlImport
+	m.curlImport.loadNew()
+	m.curlImport.name.SetValue("Bad")
+	m.curlImport.cmd.SetValue(`curl -X GET`) // no URL
+
+	updated, _ := m.updateCurlImport(tea.KeyMsg{Type: tea.KeyCtrlS})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateCurlImport returned %T, want appModel", updated)
+	}
+	if am.screen != screenCurlImport {
+		t.Errorf("screen = %v, want to stay on screenCurlImport (%v) after a parse error", am.screen, screenCurlImport)
+	}
+	if am.curlImport.err == "" {
+		t.Error("expected curlImport.err to be set after a parse error")
+	}
+}

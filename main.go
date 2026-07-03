@@ -7,10 +7,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/melvinsembrano/terman/internal/curl"
 	"github.com/melvinsembrano/terman/internal/dotenv"
 	"github.com/melvinsembrano/terman/internal/httpx"
 	"github.com/melvinsembrano/terman/internal/model"
@@ -37,6 +39,8 @@ func main() {
 		err = cmdList(args[1:])
 	case "env":
 		err = cmdEnv(args[1:])
+	case "import":
+		err = cmdImport(args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return
@@ -66,6 +70,7 @@ Usage:
   terman env unset <name> <key>...      Remove variables from an environment
   terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
+  terman import curl <name> [file]      Save a request parsed from a curl command
   terman help                           Show this help
 
 Flags for "run":
@@ -73,6 +78,9 @@ Flags for "run":
   --env-file <path>  Load extra variables from a .env file for this run only (not saved)
   --var k=v          Override/add a variable (repeatable)
   -i                 Also print response headers
+
+"import curl" reads the curl command from <file> if given, otherwise from
+stdin (e.g. "pbpaste | terman import curl \"Get Users\"").
 `)
 }
 
@@ -313,4 +321,59 @@ func cmdEnv(args []string) error {
 	default:
 		return fmt.Errorf("unknown env subcommand %q", args[0])
 	}
+}
+
+func cmdImport(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terman import curl <name> [file]")
+	}
+	switch args[0] {
+	case "curl":
+		return cmdImportCurl(args[1:])
+	default:
+		return fmt.Errorf("unknown import subcommand %q", args[0])
+	}
+}
+
+func cmdImportCurl(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terman import curl <name> [file]")
+	}
+	name := args[0]
+
+	var r io.Reader = os.Stdin
+	if len(args) >= 2 {
+		f, err := os.Open(args[1])
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		r = f
+	}
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	req, err := curl.Parse(string(data))
+	if err != nil {
+		return err
+	}
+	req.Name = name
+
+	if err := store.SaveRequest(req, ""); err != nil {
+		return err
+	}
+
+	fmt.Printf("Imported %q: %s %s", req.Name, req.Method, req.URL)
+	if n := len(req.Headers); n > 0 {
+		if n == 1 {
+			fmt.Print(" (1 header)")
+		} else {
+			fmt.Printf(" (%d headers)", n)
+		}
+	}
+	fmt.Println()
+	return nil
 }
