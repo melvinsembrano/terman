@@ -26,3 +26,9 @@ go.work.sum
 *.swp
 .idea/
 .vscode/
+
+# Ignore terman binaries for all platforms
+terman-linux
+terman-linux-arm
+terman-mac
+terman-mac-arm
