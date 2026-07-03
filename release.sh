@@ -73,6 +73,22 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
 fi
 TAG="v${VERSION}"
 
+# Capture the previous tag now, before anything below creates $TAG —
+# otherwise "git describe" could resolve to the tag we're about to
+# create instead of the real previous one. Empty on a first-ever release.
+PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+
+# A plain commit list to prepend ahead of GitHub's own --generate-notes
+# section (which only lists merged PRs — this repo has none, so on its
+# own it produces just a bare compare-link with no actual changelog).
+if [[ -n "$PREV_TAG" ]]; then
+  COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty='format:- %s (%h)')
+  NOTES_PREFIX=$'## Commits since '"$PREV_TAG"$'\n\n'"$COMMITS"$'\n'
+else
+  COMMITS=$(git log --pretty='format:- %s (%h)')
+  NOTES_PREFIX=$'## Commits\n\n'"$COMMITS"$'\n'
+fi
+
 # --- Pre-flight checks (always run, even under --dry-run) -------------
 
 echo "== Pre-flight checks =="
@@ -134,7 +150,11 @@ if ! $DRY_RUN && ! $ASSUME_YES; then
   echo "About to:"
   echo "  1. Build all platform binaries via $BUILD_SCRIPT"
   echo "  2. Create and push tag $TAG"
-  echo "  3. Publish a GitHub release $TAG with the binaries attached"
+  if [[ -n "$PREV_TAG" ]]; then
+    echo "  3. Publish a GitHub release $TAG with the binaries attached and a commit list since $PREV_TAG"
+  else
+    echo "  3. Publish a GitHub release $TAG with the binaries attached and a commit list"
+  fi
   echo
   read -r -p "Continue? [y/N] " REPLY
   case "$REPLY" in
@@ -184,14 +204,38 @@ fi
 
 echo
 echo "== GitHub release =="
+echo "Release notes will prepend this commit list ahead of GitHub's own auto-generated section:"
+echo "---"
+echo "$NOTES_PREFIX"
+echo "---"
+
 if $DRY_RUN; then
-  echo "[dry-run] would run: gh release create $TAG --verify-tag --generate-notes --title $TAG ${BINARIES[*]}"
+  if [[ -n "$PREV_TAG" ]]; then
+    echo "[dry-run] would run: gh release create $TAG --verify-tag --generate-notes --notes <above> --notes-start-tag $PREV_TAG --title $TAG ${BINARIES[*]}"
+  else
+    echo "[dry-run] would run: gh release create $TAG --verify-tag --generate-notes --notes <above> --title $TAG ${BINARIES[*]}"
+  fi
 else
-  gh release create "$TAG" \
-    --verify-tag \
-    --generate-notes \
-    --title "$TAG" \
-    "${BINARIES[@]}"
+  # Branched (rather than building an optional-flag array) because an
+  # empty array expanded with "${arr[@]}" under `set -u` is a portability
+  # trap on bash 3.2 (macOS's default /bin/bash) — it errors as an
+  # unbound variable instead of expanding to nothing.
+  if [[ -n "$PREV_TAG" ]]; then
+    gh release create "$TAG" \
+      --verify-tag \
+      --generate-notes \
+      --notes "$NOTES_PREFIX" \
+      --notes-start-tag "$PREV_TAG" \
+      --title "$TAG" \
+      "${BINARIES[@]}"
+  else
+    gh release create "$TAG" \
+      --verify-tag \
+      --generate-notes \
+      --notes "$NOTES_PREFIX" \
+      --title "$TAG" \
+      "${BINARIES[@]}"
+  fi
   echo
   echo "Release $TAG published: $(gh release view "$TAG" --json url -q .url)"
 fi
