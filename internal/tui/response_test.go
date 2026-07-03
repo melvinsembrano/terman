@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/httpx"
 )
@@ -306,10 +307,106 @@ func TestShowErrorRendersMessage(t *testing.T) {
 
 func TestShowRunningSetsTitle(t *testing.T) {
 	s := newResponseScreen()
-	s.showRunning("Get Widget")
+	cmd := s.showRunning("Get Widget")
 
 	if !strings.Contains(s.title, "Get Widget") {
 		t.Errorf("title = %q, want to contain %q", s.title, "Get Widget")
+	}
+	if !s.running {
+		t.Error("expected running=true after showRunning")
+	}
+	if cmd == nil {
+		t.Fatal("expected showRunning to return a non-nil cmd to kick off the spinner")
+	}
+	if _, ok := cmd().(spinner.TickMsg); !ok {
+		t.Errorf("expected the returned cmd to produce a spinner.TickMsg")
+	}
+}
+
+func TestShowResultAndShowErrorStopSpinner(t *testing.T) {
+	s := newResponseScreen()
+	s.showRunning("Get Widget")
+	s.showResult("Get Widget", httpx.Response{Status: "200 OK", StatusCode: 200})
+	if s.running {
+		t.Error("expected running=false after showResult")
+	}
+
+	s2 := newResponseScreen()
+	s2.showRunning("Get Widget")
+	s2.showError("Get Widget", errBoom)
+	if s2.running {
+		t.Error("expected running=false after showError")
+	}
+}
+
+func TestSpinnerTickIgnoredWhenNotRunning(t *testing.T) {
+	s := newResponseScreen() // running defaults to false
+
+	_, cmd := s.Update(spinner.TickMsg{})
+	if cmd != nil {
+		t.Error("expected a stale tick (not running) to produce a nil cmd, breaking the perpetuation chain")
+	}
+}
+
+func TestSpinnerTickKeepsAnimatingWhileRunning(t *testing.T) {
+	s := newResponseScreen()
+	cmd := s.showRunning("Get Widget")
+
+	updated, cmd2 := s.Update(cmd())
+	if cmd2 == nil {
+		t.Fatal("expected a follow-up cmd to keep the spinner animating while running")
+	}
+	if !strings.Contains(updated.View(), "sending request") {
+		t.Errorf("expected the running view to show a loading message, got:\n%s", updated.View())
+	}
+}
+
+func TestMouseClickSelectsJSONLine(t *testing.T) {
+	s := newResponseScreen()
+	s.setSize(80, 20)
+	s.showResult("Req", httpx.Response{
+		Status: "200 OK", StatusCode: 200,
+		Body: `{"a":1,"b":2,"c":3}`,
+	})
+
+	targetIdx := 2 // the "b": 2 line
+	y := responseViewportTop + s.headerLines + 2 + targetIdx
+	updated, _ := s.Update(tea.MouseMsg{Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+
+	if updated.cursor != targetIdx {
+		t.Fatalf("cursor after click = %d, want %d", updated.cursor, targetIdx)
+	}
+	if len(updated.lines) != len(s.lines) {
+		t.Error("a click should only move the cursor, never fold/unfold")
+	}
+}
+
+func TestMouseClickOutsideBodyIsNoop(t *testing.T) {
+	s := newResponseScreen()
+	s.setSize(80, 20)
+	s.showResult("Req", httpx.Response{Status: "200 OK", StatusCode: 200, Body: `{"a":1}`})
+
+	// Click on the status/header block, well above the body lines.
+	updated, _ := s.Update(tea.MouseMsg{Y: responseViewportTop, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if updated.cursor != 0 {
+		t.Errorf("cursor = %d, want unchanged 0 for a click above the body", updated.cursor)
+	}
+
+	// Click far below the last rendered line.
+	updated, _ = s.Update(tea.MouseMsg{Y: 1000, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if updated.cursor != 0 {
+		t.Errorf("cursor = %d, want unchanged 0 for a click below the body", updated.cursor)
+	}
+}
+
+func TestMouseClickOnNonJSONBodyIsNoop(t *testing.T) {
+	s := newResponseScreen()
+	s.setSize(80, 20)
+	s.showResult("Req", httpx.Response{Status: "200 OK", StatusCode: 200, Body: "plain text body"})
+
+	updated, _ := s.Update(tea.MouseMsg{Y: responseViewportTop + 5, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if updated.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (non-JSON bodies ignore clicks)", updated.cursor)
 	}
 }
 

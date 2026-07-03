@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/httpx"
@@ -18,6 +19,15 @@ import (
 // renders (e.g. before the first WindowSizeMsg), so this is a fixed,
 // reasonable default rather than measuring s.vp.Width.
 const dividerWidth = 40
+
+// responseViewportTop is the absolute terminal row (from the top of the
+// screen) where the response viewport's own content begins: the app's own
+// header (headerLines) plus this screen's title line and the blank line
+// View() puts after it — mirrors envRowsContentTop's
+// "headerLines + <this screen's own fixed chrome>" pattern in
+// enveditor.go, since this screen also renders its own layout rather than
+// relying on an unexported bubbles view method.
+const responseViewportTop = headerLines + 2
 
 // runResultMsg carries the outcome of an asynchronously executed request
 // back into the Bubble Tea update loop.
@@ -56,10 +66,16 @@ type responseScreen struct {
 	cursor int
 
 	plainBody string // set when the body isn't JSON (or is empty)
+
+	spinner spinner.Model
+	running bool // true while a request is in flight; drives the spinner view
 }
 
 func newResponseScreen() responseScreen {
-	return responseScreen{vp: viewport.New(0, 0)}
+	return responseScreen{
+		vp:      viewport.New(0, 0),
+		spinner: spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(spinnerStyle)),
+	}
 }
 
 func (s *responseScreen) setSize(w, h int) {
@@ -67,14 +83,21 @@ func (s *responseScreen) setSize(w, h int) {
 	s.vp.Height = h
 }
 
-func (s *responseScreen) showRunning(name string) {
-	s.title = "Running " + name + " ..."
+// showRunning marks the screen as waiting on an in-flight request and
+// starts the loading spinner. The returned cmd must be scheduled (e.g. via
+// tea.Batch alongside the command that actually performs the request) or
+// the spinner never animates.
+func (s *responseScreen) showRunning(name string) tea.Cmd {
+	s.title = "Running " + name
+	s.running = true
 	s.vp.SetContent("")
 	s.vp.GotoTop()
+	return s.spinner.Tick
 }
 
 func (s *responseScreen) showError(name string, err error) {
 	s.title = name
+	s.running = false
 	s.vp.SetContent(errorStyle.Render("error: " + err.Error()))
 	s.vp.GotoTop()
 }
@@ -83,6 +106,7 @@ func (s *responseScreen) showError(name string, err error) {
 // body as JSON when possible.
 func (s *responseScreen) showResult(name string, resp httpx.Response) {
 	s.title = name
+	s.running = false
 	s.headerBlock = renderHeaderBlock(resp)
 	s.headerLines = strings.Count(s.headerBlock, "\n")
 
@@ -247,6 +271,24 @@ func (s *responseScreen) ensureCursorVisible() {
 	}
 }
 
+// lineAtY maps an absolute terminal row (as reported on a tea.MouseEvent)
+// to an index into s.lines, honoring the current scroll offset. Reports
+// false when the click falls outside the body's visible JSON lines (e.g.
+// on the header/status block above, or below the last rendered line).
+func (s *responseScreen) lineAtY(y int) (int, bool) {
+	rel := y - responseViewportTop
+	if rel < 0 {
+		return 0, false
+	}
+	// s.headerLines + 2 accounts for the header block plus the "Body"
+	// label and its divider, matching ensureCursorVisible's math.
+	idx := s.vp.YOffset + rel - (s.headerLines + 2)
+	if idx < 0 || idx >= len(s.lines) {
+		return 0, false
+	}
+	return idx, true
+}
+
 // toggleFold collapses or expands the container at the cursor. A no-op on
 // scalars, empty containers, or when the body isn't JSON.
 func (s *responseScreen) toggleFold() {
@@ -278,25 +320,44 @@ func (s *responseScreen) toggleFold() {
 }
 
 func (s responseScreen) Update(msg tea.Msg) (responseScreen, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && s.isJSON {
-		switch key.String() {
-		case "up":
-			if s.cursor > 0 {
-				s.cursor--
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !s.running {
+			return s, nil // stale tick from a request that already finished; drop it
+		}
+		var cmd tea.Cmd
+		s.spinner, cmd = s.spinner.Update(msg)
+		return s, cmd
+	case tea.MouseMsg:
+		if s.isJSON && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if idx, ok := s.lineAtY(msg.Y); ok {
+				s.cursor = idx
 				s.render()
 				s.ensureCursorVisible()
+				return s, nil
 			}
-			return s, nil
-		case "down":
-			if s.cursor < len(s.lines)-1 {
-				s.cursor++
-				s.render()
-				s.ensureCursorVisible()
+		}
+	case tea.KeyMsg:
+		if s.isJSON {
+			switch msg.String() {
+			case "up":
+				if s.cursor > 0 {
+					s.cursor--
+					s.render()
+					s.ensureCursorVisible()
+				}
+				return s, nil
+			case "down":
+				if s.cursor < len(s.lines)-1 {
+					s.cursor++
+					s.render()
+					s.ensureCursorVisible()
+				}
+				return s, nil
+			case "enter", " ":
+				s.toggleFold()
+				return s, nil
 			}
-			return s, nil
-		case "enter", " ":
-			s.toggleFold()
-			return s, nil
 		}
 	}
 	var cmd tea.Cmd
@@ -305,9 +366,14 @@ func (s responseScreen) Update(msg tea.Msg) (responseScreen, tea.Cmd) {
 }
 
 func (s responseScreen) View() string {
+	if s.running {
+		return titleStyle.Render(s.title) + "\n\n" +
+			s.spinner.View() + " " + subtleStyle.Render("sending request…") + "\n\n" +
+			helpStyle.Render("esc back")
+	}
 	help := "↑/↓ pgup/pgdn scroll"
 	if s.isJSON {
-		help += " • enter/space fold"
+		help += " • click to select • enter/space fold"
 	}
 	help += " • esc back"
 	return titleStyle.Render(s.title) + "\n\n" + s.vp.View() + "\n" + helpStyle.Render(help)

@@ -182,9 +182,9 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if req, ok := m.list.selected(); ok {
-				m.response.showRunning(req.Name)
+				spinCmd := m.response.showRunning(req.Name)
 				m.screen = screenResponse
-				return m, runRequestCmd(req, m.activeEnvVars())
+				return m, tea.Batch(spinCmd, runRequestCmd(req, m.activeEnvVars()))
 			}
 			return m, nil
 		}

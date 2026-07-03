@@ -112,11 +112,13 @@ terman
 Headers are entered one per line as `Key: Value`. URL, headers, and body may
 reference environment variables as `{{name}}`.
 
-**Response screen:** the status line is colored by class (2xx green, 3xx
-cyan, 4xx orange, 5xx red — the same convention curl/httpie/browser
-devtools use), with clearly separated, labeled Headers and Body sections.
-JSON bodies render as an interactive, syntax-highlighted tree, fx-style:
-`↑`/`↓` moves a line cursor, `enter`/`space` folds or unfolds the
+**Response screen:** while a request is in flight, a spinner and "sending
+request…" message show so it's never just a blank screen. Once it
+completes, the status line is colored by class (2xx green, 3xx cyan, 4xx
+orange, 5xx red — the same convention curl/httpie/browser devtools use),
+with clearly separated, labeled Headers and Body sections. JSON bodies
+render as an interactive, syntax-highlighted tree, fx-style: `↑`/`↓` or a
+click moves a line cursor, `enter`/`space` folds or unfolds the
 object/array under it (collapsed containers show as `{…3}`/`[…5]`).
 Non-JSON bodies stay plain scrollable text. `pgup`/`pgdn` and the mouse
 wheel scroll either way; `esc` goes back.
@@ -125,9 +127,10 @@ wheel scroll either way; `esc` goes back.
 
 The TUI responds to the mouse: scroll the wheel in the request list, the
 environment list, or the response viewer to move the selection/scroll;
-click a row in the request list, the environment list, or the environment
-editor's variable rows to select it — never to run/open it, you still
-press enter for that, same as with the keyboard. Press `ctrl+t` from any
+click a row in the request list, the environment list, the environment
+editor's variable rows, or a line in the response screen's JSON tree to
+select it — never to run/open it, you still press enter for that, same as
+with the keyboard. Press `ctrl+t` from any
 screen to toggle mouse capture off and on: most terminals need a modifier
 key held (e.g. Option/Shift while dragging) to select/copy text normally
 while an app has the mouse captured, so `ctrl+t` lets you turn it off for

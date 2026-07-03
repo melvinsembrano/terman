@@ -146,6 +146,12 @@ alone — read before making changes in these areas.
    `envEditorScreen`'s row clicks (internal/tui/enveditor.go) don't have
    this problem — that screen renders its own rows, so its offset constant
    is derived directly from code we own, not from an unexported dependency.
+   `responseScreen`'s JSON-tree clicks (internal/tui/response.go,
+   `responseViewportTop` + `lineAtY`) are the same self-owned case: the
+   body is rendered entirely by our own code into a `viewport.Model`, so
+   the click-to-line math only depends on `headerLines`, the response
+   screen's own fixed chrome, and `s.vp.YOffset` — no bubbles internals
+   involved.
 
 10. **lipgloss renders no ANSI codes under `go test`.** Outside a real
     terminal (which is what `go test` is), lipgloss's color-profile

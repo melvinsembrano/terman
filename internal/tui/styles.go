@@ -31,6 +31,9 @@ var (
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
 
+	spinnerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("212"))
+
 	// JSON token styles, used by the response screen's fx-style tree view.
 	jsonKeyStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39"))
