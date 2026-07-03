@@ -580,3 +580,141 @@ func TestViewHeaderShowsVersion(t *testing.T) {
 		t.Errorf("View() header does not contain %q, got:\n%s", want, got)
 	}
 }
+
+func newAppModelWithRequests(t *testing.T, names ...string) appModel {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, n := range names {
+		if err := store.SaveRequest(model.Request{Name: n, Method: "GET", URL: "https://example.com"}, ""); err != nil {
+			t.Fatalf("SaveRequest(%q): %v", n, err)
+		}
+	}
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	return m
+}
+
+func pressMouse(t *testing.T, m appModel, updateFn func(appModel, tea.Msg) (tea.Model, tea.Cmd), msg tea.MouseMsg) appModel {
+	t.Helper()
+	updated, _ := updateFn(m, msg)
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("update returned %T, want appModel", updated)
+	}
+	return am
+}
+
+func TestListWheelMovesSelection(t *testing.T) {
+	m := newAppModelWithRequests(t, "Alpha", "Bravo", "Charlie")
+	if req, ok := m.list.selected(); !ok || req.Name != "Alpha" {
+		t.Fatalf("initial selection = %+v, want Alpha", req)
+	}
+
+	m = pressMouse(t, m, appModel.updateList, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if req, ok := m.list.selected(); !ok || req.Name != "Bravo" {
+		t.Fatalf("after wheel down, selection = %+v, want Bravo", req)
+	}
+
+	m = pressMouse(t, m, appModel.updateList, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if req, ok := m.list.selected(); !ok || req.Name != "Alpha" {
+		t.Fatalf("after wheel up, selection = %+v, want Alpha", req)
+	}
+}
+
+func TestListClickSelectsRow(t *testing.T) {
+	m := newAppModelWithRequests(t, "Alpha", "Bravo", "Charlie")
+	m.list.setSize(80, 20)
+
+	// listContentTop = headerLines(2) + list title block(2) = 4; each row's
+	// stride = delegate.Height()(2) + delegate.Spacing()(1) = 3.
+	m2 := pressMouse(t, m, appModel.updateList, tea.MouseMsg{Y: 4 + 2*3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if req, ok := m2.list.selected(); !ok || req.Name != "Charlie" {
+		t.Fatalf("click on row 2 selected = %+v, want Charlie", req)
+	}
+
+	m3 := pressMouse(t, m, appModel.updateList, tea.MouseMsg{Y: 4, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if req, ok := m3.list.selected(); !ok || req.Name != "Alpha" {
+		t.Fatalf("click on row 0 selected = %+v, want Alpha", req)
+	}
+}
+
+func TestListClickOutsideContentIsNoop(t *testing.T) {
+	m := newAppModelWithRequests(t, "Alpha", "Bravo", "Charlie")
+	m.list.setSize(80, 20)
+
+	// Above the content block (on the title).
+	above := pressMouse(t, m, appModel.updateList, tea.MouseMsg{Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if req, ok := above.list.selected(); !ok || req.Name != "Alpha" {
+		t.Errorf("click above content changed selection to %+v, want unchanged Alpha", req)
+	}
+
+	// Well below the last item.
+	below := pressMouse(t, m, appModel.updateList, tea.MouseMsg{Y: 100, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if req, ok := below.list.selected(); !ok || req.Name != "Alpha" {
+		t.Errorf("click below content changed selection to %+v, want unchanged Alpha", req)
+	}
+}
+
+func TestEnvListWheelMovesSelection(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := appModel{
+		envs:    []model.Environment{{Name: "dev"}, {Name: "prod"}},
+		envList: newEnvListScreen([]model.Environment{{Name: "dev"}, {Name: "prod"}}, "", nil),
+	}
+	m.envList.setSize(80, 20)
+
+	updated, _ := m.updateEnvList(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("updateEnvList returned %T, want appModel", updated)
+	}
+	if env, ok := am.envList.selected(); !ok || env.Name != "prod" {
+		t.Fatalf("after wheel down, selection = %+v, want prod", env)
+	}
+}
+
+func TestToggleMouseKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	if !m.mouseEnabled {
+		t.Fatal("expected mouseEnabled to start true")
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlT})
+	am, ok := updated.(appModel)
+	if !ok {
+		t.Fatalf("Update returned %T, want appModel", updated)
+	}
+	if am.mouseEnabled {
+		t.Error("expected mouseEnabled to flip to false")
+	}
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd disabling the mouse")
+	}
+	if cmd() == nil {
+		t.Error("expected the returned cmd to produce a message when invoked")
+	}
+	if !strings.Contains(am.View(), "mouse: off") {
+		t.Errorf("View() does not show the mouse-off indicator, got:\n%s", am.View())
+	}
+
+	updated2, cmd2 := am.Update(tea.KeyMsg{Type: tea.KeyCtrlT})
+	am2, ok := updated2.(appModel)
+	if !ok {
+		t.Fatalf("Update returned %T, want appModel", updated2)
+	}
+	if !am2.mouseEnabled {
+		t.Error("expected mouseEnabled to flip back to true")
+	}
+	if cmd2 == nil || cmd2() == nil {
+		t.Error("expected a non-nil tea.Cmd re-enabling the mouse")
+	}
+	if strings.Contains(am2.View(), "mouse: off") {
+		t.Errorf("View() still shows the mouse-off indicator after re-enabling, got:\n%s", am2.View())
+	}
+}

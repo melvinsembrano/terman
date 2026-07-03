@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/model"
 )
 
@@ -16,6 +17,7 @@ func envListHelpKeys() []key.Binding {
 		key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "load session env")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "set active")),
+		key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle mouse")),
 	}
 }
 
@@ -55,6 +57,10 @@ func (i envItem) FilterValue() string { return i.env.Name }
 // passes in, since session-only environments never exist on disk.
 type envListScreen struct {
 	lst list.Model
+	// delegate is the same value lst was built with, kept here because
+	// list.Model exposes no getter for it — needed by handleMouse to
+	// compute row heights for click hit-testing.
+	delegate list.DefaultDelegate
 }
 
 func envItems(envs []model.Environment, active string, sessionEnvs map[string]bool) []list.Item {
@@ -74,9 +80,14 @@ func newEnvListScreen(envs []model.Environment, active string, sessionEnvs map[s
 	lst := list.New(envItems(envs, active, sessionEnvs), delegate, 0, 0)
 	lst.Title = "Environments"
 	lst.SetShowHelp(true)
+	// Turned off so click-to-select math (listContentTop, mouse.go) can
+	// rely on an exact, fixed title-block height instead of the variable
+	// height these would otherwise add.
+	lst.SetShowStatusBar(false)
+	lst.SetShowPagination(false)
 	lst.AdditionalShortHelpKeys = envListHelpKeys
 	lst.AdditionalFullHelpKeys = envListHelpKeys
-	return envListScreen{lst: lst}
+	return envListScreen{lst: lst, delegate: delegate}
 }
 
 func (s *envListScreen) setSize(w, h int) {
@@ -98,6 +109,12 @@ func (s envListScreen) selected() (model.Environment, bool) {
 
 func (s envListScreen) isFiltering() bool {
 	return s.lst.SettingFilter()
+}
+
+// handleMouse applies wheel-scroll and click-to-select (see mouse.go). It
+// reports whether it consumed the event.
+func (s *envListScreen) handleMouse(msg tea.MouseEvent) bool {
+	return listMouseEvent(msg, &s.lst, s.delegate)
 }
 
 func (s envListScreen) View() string {

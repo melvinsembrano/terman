@@ -48,6 +48,7 @@ terman
 | `E`      | cycle the active environment   |
 | `v`      | manage environments            |
 | `I`      | import a request from a curl command |
+| `ctrl+t` | toggle mouse capture            |
 | `/`      | filter                         |
 | `q`      | quit                            |
 
@@ -64,6 +65,21 @@ Headers are entered one per line as `Key: Value`. URL, headers, and body may
 reference environment variables as `{{name}}`.
 
 **Response screen:** `↑`/`↓`/page up/down to scroll, `esc` to go back.
+
+### Mouse support
+
+The TUI responds to the mouse: scroll the wheel in the request list, the
+environment list, or the response viewer to move the selection/scroll;
+click a row in the request list, the environment list, or the environment
+editor's variable rows to select it — never to run/open it, you still
+press enter for that, same as with the keyboard. Press `ctrl+t` from any
+screen to toggle mouse capture off and on: most terminals need a modifier
+key held (e.g. Option/Shift while dragging) to select/copy text normally
+while an app has the mouse captured, so `ctrl+t` lets you turn it off for
+that and back on when you're done — the header shows `mouse: off` as a
+reminder while it's disabled. Text fields (request name/URL/headers/body,
+the curl-paste box, environment names) have no mouse support — clicking or
+scrolling over them does nothing.
 
 ### Importing a request from curl
 
@@ -88,6 +104,7 @@ Press `v` from the request list to open the environment manager:
 | `L`       | load a **session-only** environment (see below) |
 | `d`       | delete the selected environment  |
 | `u`       | set the selected environment active |
+| `ctrl+t`  | toggle mouse capture              |
 | `esc`/`q` | back to the request list         |
 
 **Environment editor screen** (name field + a row-based list of variables):

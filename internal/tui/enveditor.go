@@ -249,6 +249,35 @@ func (s *envEditorScreen) setSectionFocus(section int) {
 	}
 }
 
+// envRowsContentTop is the fixed number of lines before the variable rows
+// begin in envEditorScreen's own View(): terman's own header (headerLines)
+// plus the 4 lines View() always emits before the rows loop (the Name
+// label, the Name field, a blank line, and the "Variables" label). Each
+// row itself is exactly one line, with no spacing between rows. Keep in
+// sync with View() if that layout changes.
+const envRowsContentTop = headerLines + 4
+
+// handleMouse applies click-to-select to the variable rows: a left click
+// moves the selection the same way arrow-key navigation does — it never
+// opens the row-edit modal, which still requires enter. Ignored while the
+// row-edit or import modal is open, or when the click misses every row.
+// Reports whether it consumed the event.
+func (s *envEditorScreen) handleMouse(msg tea.MouseEvent) bool {
+	if s.editing || s.importing {
+		return false
+	}
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return false
+	}
+	idx := msg.Y - envRowsContentTop
+	if idx < 0 || idx >= len(s.pairs) {
+		return false
+	}
+	s.section = envSectionRows
+	s.selected = idx
+	return true
+}
+
 func (s envEditorScreen) Update(msg tea.Msg) (envEditorScreen, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if s.editing {

@@ -46,6 +46,11 @@ type appModel struct {
 	// only — loaded via the env list's "L" key, never persisted to disk,
 	// and gone when the program exits.
 	sessionEnvs map[string]bool
+
+	// mouseEnabled tracks whether mouse capture is currently on (toggled
+	// with "m"). Starts true — mouse mode is enabled at Program startup
+	// in Run().
+	mouseEnabled bool
 }
 
 // Run starts the Bubble Tea program and blocks until the user quits.
@@ -54,7 +59,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -72,15 +77,16 @@ func newAppModel() (appModel, error) {
 		return appModel{}, err
 	}
 	return appModel{
-		screen:     screenList,
-		activeEnv:  active,
-		envs:       envs,
-		list:       lst,
-		editor:     newEditorScreen(),
-		response:   newResponseScreen(),
-		envList:    newEnvListScreen(envs, active, nil),
-		envEditor:  newEnvEditorScreen(),
-		curlImport: newCurlImportScreen(),
+		screen:       screenList,
+		activeEnv:    active,
+		envs:         envs,
+		list:         lst,
+		editor:       newEditorScreen(),
+		response:     newResponseScreen(),
+		envList:      newEnvListScreen(envs, active, nil),
+		envEditor:    newEnvEditorScreen(),
+		curlImport:   newCurlImportScreen(),
+		mouseEnabled: true,
 	}, nil
 }
 
@@ -102,8 +108,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.curlImport.setSize(msg.Width, bodyH)
 		return m, nil
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+t":
+			// A bare letter (e.g. "m") isn't safe here: this branch runs
+			// before per-screen dispatch, so it would swallow that
+			// character everywhere it's typed into a text field (names,
+			// URLs, bodies, curl commands, ...). A ctrl-chord, like the
+			// existing ctrl+s/ctrl+c, can't collide with typed text.
+			m.mouseEnabled = !m.mouseEnabled
+			if m.mouseEnabled {
+				return m, tea.EnableMouseCellMotion
+			}
+			return m, tea.DisableMouse
 		}
 	}
 
@@ -125,6 +143,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if m.list.handleMouse(tea.MouseEvent(mouseMsg)) {
+			return m, nil
+		}
+	}
 	if key, ok := msg.(tea.KeyMsg); ok && !m.list.isFiltering() {
 		switch key.String() {
 		case "q":
@@ -203,6 +226,11 @@ func (m appModel) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) updateEnvList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if m.envList.handleMouse(tea.MouseEvent(mouseMsg)) {
+			return m, nil
+		}
+	}
 	if key, ok := msg.(tea.KeyMsg); ok && !m.envList.isFiltering() {
 		switch key.String() {
 		case "esc", "q":
@@ -251,6 +279,11 @@ func (m appModel) updateEnvList(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) updateEnvEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if m.envEditor.handleMouse(tea.MouseEvent(mouseMsg)) {
+			return m, nil
+		}
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -467,7 +500,11 @@ func (m appModel) View() string {
 		env = "none"
 	}
 	header := titleStyle.Render("terman") + " " + subtleStyle.Render("v"+version.Version) +
-		"  " + subtleStyle.Render("env: "+env) + "\n\n"
+		"  " + subtleStyle.Render("env: "+env)
+	if !m.mouseEnabled {
+		header += "  " + subtleStyle.Render("mouse: off")
+	}
+	header += "\n\n"
 
 	switch m.screen {
 	case screenList:

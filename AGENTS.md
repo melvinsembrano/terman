@@ -38,6 +38,8 @@ are the full verification bar for this repo.
   version`/`--version` and in the TUI header.
 - `internal/tui` — the Bubble Tea screens (request list/editor/response,
   env list/editor, curl import) and the root `appModel`.
+  `internal/tui/mouse.go` holds the shared wheel-scroll/click-to-select
+  math for the two `list.Model`-based screens (see bespoke convention #9).
 
 ## Code style
 
@@ -114,10 +116,28 @@ alone — read before making changes in these areas.
      asserting on CLI stdout output.
    - TUI tests call the unexported `update*` methods and screen helpers
      directly (no real `tea.Program` needed), driving them with synthetic
-     messages like `tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")}` or
-     `tea.KeyMsg{Type: tea.KeyCtrlS}`.
+     messages like `tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")}`,
+     `tea.KeyMsg{Type: tea.KeyCtrlS}`, or
+     `tea.MouseMsg{Y: ..., Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}`.
 
 8. **Versioning is a hand-bumped constant.** `internal/version.Version` is
    edited by hand when cutting a release — there's no ldflags injection,
    build tooling, or git tags yet. Bump it in the same commit as the
    changes it covers.
+
+9. **List click-to-select math depends on the pinned bubbles version.**
+   `bubbles@v0.18.0`'s `list.Model` has no built-in mouse handling, and the
+   view methods that determine its title/status-bar/pagination heights are
+   unexported — there's no way to query them at runtime. `internal/tui/mouse.go`'s
+   `listContentTop` constant instead relies on two things staying true:
+   `newListScreen`/`newEnvListScreen` (internal/tui/list.go,
+   internal/tui/envlist.go) keep the status bar and pagination indicator
+   turned off, and the pinned version's default `TitleBar` style
+   (`Padding(0,0,1,2)`) renders a fixed 2-line title block for our short,
+   non-wrapping titles. Bumping bubbles (see convention #1) or changing
+   either `SetShowStatusBar`/`SetShowPagination` call means re-deriving
+   this constant — the `TestListClickSelectsRow`/`TestListClickOutsideContentIsNoop`
+   tests in `internal/tui/app_test.go` will fail loudly if it's wrong.
+   `envEditorScreen`'s row clicks (internal/tui/enveditor.go) don't have
+   this problem — that screen renders its own rows, so its offset constant
+   is derived directly from code we own, not from an unexported dependency.

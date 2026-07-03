@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
 )
@@ -16,6 +17,7 @@ func listHelpKeys() []key.Binding {
 		key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "cycle env")),
 		key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "manage envs")),
 		key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "import curl")),
+		key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle mouse")),
 	}
 }
 
@@ -31,6 +33,10 @@ func (i requestItem) FilterValue() string { return i.req.Name }
 // listScreen shows the saved requests.
 type listScreen struct {
 	lst list.Model
+	// delegate is the same value lst was built with, kept here because
+	// list.Model exposes no getter for it — needed by handleMouse to
+	// compute row heights for click hit-testing.
+	delegate list.DefaultDelegate
 }
 
 func requestItems() ([]list.Item, error) {
@@ -54,9 +60,14 @@ func newListScreen() (listScreen, error) {
 	lst := list.New(items, delegate, 0, 0)
 	lst.Title = "Saved Requests"
 	lst.SetShowHelp(true)
+	// Turned off so click-to-select math (listContentTop, mouse.go) can
+	// rely on an exact, fixed title-block height instead of the variable
+	// height these would otherwise add.
+	lst.SetShowStatusBar(false)
+	lst.SetShowPagination(false)
 	lst.AdditionalShortHelpKeys = listHelpKeys
 	lst.AdditionalFullHelpKeys = listHelpKeys
-	return listScreen{lst: lst}, nil
+	return listScreen{lst: lst, delegate: delegate}, nil
 }
 
 func (s *listScreen) setSize(w, h int) {
@@ -82,6 +93,12 @@ func (s listScreen) selected() (model.Request, bool) {
 
 func (s listScreen) isFiltering() bool {
 	return s.lst.SettingFilter()
+}
+
+// handleMouse applies wheel-scroll and click-to-select (see mouse.go). It
+// reports whether it consumed the event.
+func (s *listScreen) handleMouse(msg tea.MouseEvent) bool {
+	return listMouseEvent(msg, &s.lst, s.delegate)
 }
 
 func (s listScreen) View() string {

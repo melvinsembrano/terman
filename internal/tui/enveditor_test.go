@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/model"
 )
 
@@ -265,5 +266,54 @@ func TestEnvEditorSessionOnlyFlag(t *testing.T) {
 	s.loadNew()
 	if s.sessionOnly {
 		t.Errorf("loadNew should reset sessionOnly to false")
+	}
+}
+
+func TestEnvEditorClickSelectsRow(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "a", value: "1"}, {key: "b", value: "2"}, {key: "c", value: "3"}}
+
+	// envRowsContentTop = headerLines(2) + 4 = 6; rows are one line each.
+	handled := s.handleMouse(tea.MouseEvent{Y: envRowsContentTop + 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if !handled {
+		t.Fatal("expected the click to be handled")
+	}
+	if s.selected != 2 {
+		t.Errorf("selected = %d, want 2", s.selected)
+	}
+	if s.section != envSectionRows {
+		t.Errorf("section = %d, want envSectionRows (%d)", s.section, envSectionRows)
+	}
+}
+
+func TestEnvEditorClickMissIsNoop(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "a", value: "1"}}
+	s.selected = 0
+
+	// Above the rows.
+	if s.handleMouse(tea.MouseEvent{Y: envRowsContentTop - 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}) {
+		t.Error("expected a click above the rows to be a no-op")
+	}
+	// Below the only row.
+	if s.handleMouse(tea.MouseEvent{Y: envRowsContentTop + 5, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}) {
+		t.Error("expected a click below the rows to be a no-op")
+	}
+	if s.selected != 0 {
+		t.Errorf("selected changed to %d, want unchanged 0", s.selected)
+	}
+}
+
+func TestEnvEditorClickIgnoredWhileModalOpen(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "a", value: "1"}, {key: "b", value: "2"}}
+	s.selected = 0
+	s.startAddRow() // opens the row-edit modal
+
+	if s.handleMouse(tea.MouseEvent{Y: envRowsContentTop + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}) {
+		t.Error("expected a click to be ignored while the row-edit modal is open")
+	}
+	if s.selected != 0 {
+		t.Errorf("selected changed to %d, want unchanged 0", s.selected)
 	}
 }
