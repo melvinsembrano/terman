@@ -36,6 +36,11 @@ are the full verification bar for this repo.
   used by "import curl" on both surfaces.
 - `internal/version` — the single `Version` constant shown by `terman
   version`/`--version` and in the TUI header.
+- `internal/jsonview` — parses JSON into a foldable tree (preserving key
+  order and exact number literals via `json.Decoder`'s token stream, unlike
+  `map[string]interface{}`) and flattens it into visible lines honoring
+  each node's collapsed state; powers the response screen's fx-style
+  interactive JSON viewer. Pure data/logic, no bubbletea/lipgloss.
 - `internal/tui` — the Bubble Tea screens (request list/editor/response,
   env list/editor, curl import) and the root `appModel`.
   `internal/tui/mouse.go` holds the shared wheel-scroll/click-to-select
@@ -141,3 +146,14 @@ alone — read before making changes in these areas.
    `envEditorScreen`'s row clicks (internal/tui/enveditor.go) don't have
    this problem — that screen renders its own rows, so its offset constant
    is derived directly from code we own, not from an unexported dependency.
+
+10. **lipgloss renders no ANSI codes under `go test`.** Outside a real
+    terminal (which is what `go test` is), lipgloss's color-profile
+    detection falls back to plain output — `someStyle.Render("x")` and
+    `otherStyle.Render("x")` produce identical, uncolored text. Don't test
+    styling by comparing rendered strings; either assert on the plain
+    substrings that survive regardless of styling (the existing convention
+    throughout this test suite), or — when the actual style-selection
+    logic matters, like status-code coloring — pull the classification
+    into its own pure function (`statusClass` in
+    `internal/tui/styles.go`) and test that directly.

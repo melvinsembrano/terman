@@ -112,7 +112,14 @@ terman
 Headers are entered one per line as `Key: Value`. URL, headers, and body may
 reference environment variables as `{{name}}`.
 
-**Response screen:** `↑`/`↓`/page up/down to scroll, `esc` to go back.
+**Response screen:** the status line is colored by class (2xx green, 3xx
+cyan, 4xx orange, 5xx red — the same convention curl/httpie/browser
+devtools use), with clearly separated, labeled Headers and Body sections.
+JSON bodies render as an interactive, syntax-highlighted tree, fx-style:
+`↑`/`↓` moves a line cursor, `enter`/`space` folds or unfolds the
+object/array under it (collapsed containers show as `{…3}`/`[…5]`).
+Non-JSON bodies stay plain scrollable text. `pgup`/`pgdn` and the mouse
+wheel scroll either way; `esc` goes back.
 
 ### Mouse support
 
