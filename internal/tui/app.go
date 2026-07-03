@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
+	"github.com/melvinsembrano/terman/internal/version"
 )
 
 type screen int
@@ -465,7 +466,8 @@ func (m appModel) View() string {
 	if env == "" {
 		env = "none"
 	}
-	header := titleStyle.Render("terman") + "  " + subtleStyle.Render("env: "+env) + "\n\n"
+	header := titleStyle.Render("terman") + " " + subtleStyle.Render("v"+version.Version) +
+		"  " + subtleStyle.Render("env: "+env) + "\n\n"
 
 	switch m.screen {
 	case screenList:

@@ -11,6 +11,7 @@ import (
 
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
+	"github.com/melvinsembrano/terman/internal/version"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
@@ -686,4 +687,11 @@ func TestCmdImportCurlInvalidCommand(t *testing.T) {
 			t.Error("expected error for a curl command with no URL")
 		}
 	})
+}
+
+func TestCmdVersion(t *testing.T) {
+	out := captureStdout(t, cmdVersion)
+	if !strings.Contains(out, "terman") || !strings.Contains(out, version.Version) {
+		t.Errorf("cmdVersion output = %q, want to contain %q and %q", out, "terman", version.Version)
+	}
 }

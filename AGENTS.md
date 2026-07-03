@@ -34,6 +34,8 @@ are the full verification bar for this repo.
 - `internal/dotenv` — a small, dependency-free `.env` file parser.
 - `internal/curl` — a small, dependency-free curl-command parser/tokenizer
   used by "import curl" on both surfaces.
+- `internal/version` — the single `Version` constant shown by `terman
+  version`/`--version` and in the TUI header.
 - `internal/tui` — the Bubble Tea screens (request list/editor/response,
   env list/editor, curl import) and the root `appModel`.
 
@@ -114,3 +116,8 @@ alone — read before making changes in these areas.
      directly (no real `tea.Program` needed), driving them with synthetic
      messages like `tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")}` or
      `tea.KeyMsg{Type: tea.KeyCtrlS}`.
+
+8. **Versioning is a hand-bumped constant.** `internal/version.Version` is
+   edited by hand when cutting a release — there's no ldflags injection,
+   build tooling, or git tags yet. Bump it in the same commit as the
+   changes it covers.

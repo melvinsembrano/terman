@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
+	"github.com/melvinsembrano/terman/internal/version"
 )
 
 func TestCycleActiveEnvRotation(t *testing.T) {
@@ -562,5 +564,19 @@ func TestCurlImportParseErrorStaysOnScreen(t *testing.T) {
 	}
 	if am.curlImport.err == "" {
 		t.Error("expected curlImport.err to be set after a parse error")
+	}
+}
+
+func TestViewHeaderShowsVersion(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	got := m.View()
+	want := "v" + version.Version
+	if !strings.Contains(got, want) {
+		t.Errorf("View() header does not contain %q, got:\n%s", want, got)
 	}
 }

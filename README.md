@@ -131,6 +131,8 @@ terman env delete <name>             # delete an environment
 terman env use <name>                # set the active environment
 
 terman import curl <name> [file]     # save a request parsed from a curl command
+
+terman version                       # print the version (also shown in the TUI header)
 ```
 
 `run` flags:

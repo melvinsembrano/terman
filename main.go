@@ -19,6 +19,7 @@ import (
 	"github.com/melvinsembrano/terman/internal/store"
 	"github.com/melvinsembrano/terman/internal/tui"
 	"github.com/melvinsembrano/terman/internal/vars"
+	"github.com/melvinsembrano/terman/internal/version"
 )
 
 func main() {
@@ -41,6 +42,9 @@ func main() {
 		err = cmdEnv(args[1:])
 	case "import":
 		err = cmdImport(args[1:])
+	case "version", "-v", "--version":
+		cmdVersion()
+		return
 	case "-h", "--help", "help":
 		printUsage()
 		return
@@ -71,6 +75,7 @@ Usage:
   terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
   terman import curl <name> [file]      Save a request parsed from a curl command
+  terman version                        Show version information
   terman help                           Show this help
 
 Flags for "run":
@@ -376,4 +381,8 @@ func cmdImportCurl(args []string) error {
 	}
 	fmt.Println()
 	return nil
+}
+
+func cmdVersion() {
+	fmt.Println("terman " + version.Version)
 }
