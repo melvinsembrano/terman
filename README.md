@@ -23,7 +23,44 @@ try a value out without polluting a saved environment.
 - Organize variables into environments — persisted, or loaded session-only from a `.env` file
 - Run any saved request straight from the CLI (`terman run <name>`) for scripting and CI
 
-## Install / build
+## Install
+
+### Pre-built binaries
+
+Download the binary for your platform from the
+[latest release](https://github.com/melvinsembrano/terman/releases/latest):
+
+| Platform                     | Binary              |
+|-------------------------------|---------------------|
+| Linux (amd64)                 | `terman-linux`      |
+| Linux (arm64)                 | `terman-linux-arm`  |
+| macOS (amd64, Intel)          | `terman-mac`        |
+| macOS (arm64, Apple Silicon)  | `terman-mac-arm`    |
+| Windows (amd64)               | `terman.exe`        |
+
+macOS/Linux — download, make it executable, and put it on your `PATH`
+(example for Apple Silicon macOS):
+
+```sh
+curl -LO https://github.com/melvinsembrano/terman/releases/latest/download/terman-mac-arm
+chmod +x terman-mac-arm
+sudo mv terman-mac-arm /usr/local/bin/terman
+```
+
+macOS only: these binaries aren't code-signed, so Gatekeeper will refuse to
+run a freshly downloaded one ("cannot be opened because the developer
+cannot be verified"). Clear the quarantine flag once, after moving it into
+place:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/terman
+```
+
+Windows: download `terman.exe` from the same
+[latest release](https://github.com/melvinsembrano/terman/releases/latest)
+page and run it directly, or add its folder to your `PATH`.
+
+### Build from source
 
 ```sh
 go build -o terman .
