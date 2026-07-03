@@ -60,6 +60,17 @@ Windows: download `terman.exe` from the same
 [latest release](https://github.com/melvinsembrano/terman/releases/latest)
 page and run it directly, or add its folder to your `PATH`.
 
+### Using `go install`
+
+Requires Go 1.19+:
+
+```sh
+go install github.com/melvinsembrano/terman@latest
+```
+
+This installs to `$(go env GOPATH)/bin` (typically `~/go/bin`) — make sure
+that's on your `PATH`.
+
 ### Build from source
 
 ```sh
