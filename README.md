@@ -8,11 +8,12 @@ the TUI, or headlessly from the CLI when you're scripting, debugging over
 SSH, or wiring a smoke test into CI.
 
 Everything terman manages is a plain YAML file on disk (one per request,
-one per environment) under `~/.config/terman` — no account, no cloud sync,
-nothing to install beyond the binary. That also means your requests and
-environments are just files: diff them, put them in git alongside the
-project they belong to, or edit them by hand when that's faster than the
-TUI.
+one per environment), organized into folders you control — project-local
+by default (a `.terman` directory next to the project it belongs to), no
+account, no cloud sync, nothing to install beyond the binary. That also
+means your requests and environments are just files: diff them, commit
+`.terman` alongside the project, or edit them by hand when that's faster
+than the TUI.
 
 Environments carry the `{{variables}}` your requests reference (base URLs,
 tokens, IDs), and can be built up manually, imported from a `.env` file, or
@@ -20,8 +21,29 @@ loaded for a single session/run without ever touching disk — so you can
 try a value out without polluting a saved environment.
 
 - Build and save requests (method, URL, headers, body) without leaving the terminal
+- Organize requests into folders (e.g. `auth/login`) and browse them as a tree in the TUI
 - Organize variables into environments — persisted, or loaded session-only from a `.env` file
 - Run any saved request straight from the CLI (`terman run <name>`) for scripting and CI
+
+## Getting started
+
+```sh
+terman init
+```
+
+Sets up `.terman` in the current directory with a working sample
+environment (`dev`, pointing `base_url` at `https://httpbin.org`) and a
+sample request (`Hello httpbin`) that uses it — so there's something to
+run immediately:
+
+```sh
+terman run "Hello httpbin"
+```
+
+It's safe to run again later: `init` only fills in whatever's missing and
+never overwrites an existing request or environment (pass `--force` to
+reset the sample back to its defaults). See "Storage" below for exactly
+where `.terman` ends up and how that's decided.
 
 ## Install
 
@@ -85,19 +107,20 @@ Launch with no arguments:
 terman
 ```
 
-**List screen** (saved requests):
+**List screen** (saved requests, shown as a navigable folder tree):
 
 | Key      | Action                        |
 |----------|--------------------------------|
-| `enter`  | run the selected request       |
-| `n`      | new request                    |
+| `enter`  | open the selected folder, or run the selected request |
+| `esc`/`backspace` | go up a folder (no-op at the top level) |
+| `n`      | new request (defaults to the folder you're browsing) |
 | `e`      | edit the selected request      |
 | `d`      | delete the selected request    |
 | `E`      | cycle the active environment   |
 | `v`      | manage environments            |
 | `I`      | import a request from a curl command |
 | `ctrl+t` | toggle mouse capture            |
-| `/`      | filter                         |
+| `/`      | search — matches name, method, URL, and folder across *every* folder, not just the one you're browsing |
 | `q`      | quit                            |
 
 **Editor screen:**
@@ -110,7 +133,11 @@ terman
 | `esc`           | cancel                           |
 
 Headers are entered one per line as `Key: Value`. URL, headers, and body may
-reference environment variables as `{{name}}`.
+reference environment variables as `{{name}}`. The Folder field (e.g.
+`auth/oauth`) files the request into that folder in the tree; it defaults
+to whatever folder you were browsing when you pressed `n`, and leaving it
+blank keeps the request at the top level. Changing it on an existing
+request moves the file to the new folder.
 
 **Response screen:** while a request is in flight, a spinner and "sending
 request…" message show so it's never just a blank screen. Once it
@@ -194,7 +221,9 @@ permanent saved environment.
 ## CLI
 
 ```sh
-terman list                          # list saved requests
+terman init [--force]                # set up .terman here with a sample request + env
+
+terman list                          # list saved requests (as group/name paths)
 terman run <name> [flags]            # run a saved request
 
 terman env list                      # list saved environments (* marks active)
@@ -209,6 +238,10 @@ terman import curl <name> [file]     # save a request parsed from a curl command
 
 terman version                       # print the version (also shown in the TUI header)
 ```
+
+`<name>` above (for `run`, `import curl`) may be a bare request name or a
+`group/name` path, e.g. `terman run auth/login` — see "Organizing requests
+into folders" below.
 
 `run` flags:
 
@@ -232,11 +265,29 @@ Exit code is non-zero if the request errors or the response status is not
 Deleting the currently active environment (`env delete`) resets the active
 environment to "none".
 
+### Organizing requests into folders
+
+A request's name can be prefixed with a `/`-separated folder path — a
+"group" — e.g. `auth/login`. On disk that's just a subfolder under
+`requests/` (see "Storage" below); in the TUI it's a folder you browse into
+in the request list (`enter` to open it, `esc` to go back up). From the
+CLI, use the full `group/name` path anywhere a request name is expected:
+
+```sh
+terman run auth/login
+terman import curl auth/login < curl.txt   # save straight into a folder
+terman list                                # shows every request as its full group/name path
+```
+
+A bare name with no `/` still works and resolves normally, unless the same
+name exists in more than one folder — then it's ambiguous and `run` reports
+the full paths to choose from.
+
 ### Importing from curl
 
 `terman import curl <name> [file]` reads a curl command from `file` if
 given, otherwise from stdin — so paste-friendly input works without
-fighting shell quoting:
+fighting shell quoting (`<name>` may be a `group/name` path, see above):
 
 ```sh
 pbpaste | terman import curl "Get Users"
@@ -248,9 +299,9 @@ EOF
 ```
 
 It's saved immediately (like `env set`, no confirmation step) under the
-given name, overwriting any existing request with that name. The TUI's `I`
-key (above) does the same parsing but hands off into the editor for review
-before saving.
+given name, overwriting any existing request with that name (in that same
+folder). The TUI's `I` key (above) does the same parsing but hands off into
+the editor for review before saving.
 
 Understood flags: `-X`/`--request`; `-H`/`--header` (repeatable);
 `-d`/`--data`/`--data-raw`/`--data-ascii`/`--data-binary`/`--data-urlencode`
@@ -291,14 +342,32 @@ double-quoted (double-quoted values support `\n`, `\t`, `\"`, `\\` escapes).
 
 ## Storage
 
-Requests and environments are stored as one YAML file each, under
-`$XDG_CONFIG_HOME/terman` (or `~/.config/terman` if unset):
+Requests and environments are stored as one YAML file each, in a `.terman`
+directory resolved in this order:
+
+1. `$XDG_CONFIG_HOME/terman`, if that's set — an explicit override.
+2. The nearest `.terman` found by walking **up** from the current directory
+   through its ancestors (project-local, git-style: works from any
+   subdirectory of a project that already has one).
+3. The legacy global `~/.config/terman`, if that already exists (so
+   installs that predate project-local storage keep working).
+4. Otherwise, a fresh `./.terman` in the current directory — created by
+   `terman init` (see "Getting started" above), or lazily on first save.
+
+`terman init` is the one exception to that walk-up: it always targets
+`./.terman` in the *exact* current directory, the same way `git init` does,
+even inside a subdirectory of an existing project.
+
+Requests are organized into folders (see "Organizing requests into
+folders" above) — a subdirectory per folder under `requests/`:
 
 ```
-~/.config/terman/
-├── config.yaml          # remembers the active environment
+.terman/
+├── config.yaml               # remembers the active environment
 ├── requests/
-│   └── get-anything.yaml
+│   ├── hello-httpbin.yaml    # top-level request
+│   └── auth/
+│       └── login.yaml        # "auth/login"
 └── envs/
     └── dev.yaml
 ```
@@ -306,11 +375,13 @@ Requests and environments are stored as one YAML file each, under
 Request file:
 
 ```yaml
-name: Get Anything
-method: GET
-url: "{{base_url}}/get?msg=hello"
+name: Login
+group: auth
+method: POST
+url: "{{base_url}}/login"
 headers:
-  X-Test-Header: "{{msg}}"
+  Content-Type: application/json
+body: '{"user": "{{user}}"}'
 ```
 
 Environment file:
@@ -322,7 +393,9 @@ vars:
 ```
 
 Since these are plain files, you can hand-edit, version-control, or share
-them directly.
+them directly. A request's folder is derived from where its file actually
+lives, not just the `group:` field — moving the file (or editing the
+Folder field in the TUI) is what actually files it elsewhere.
 
 ## License
 

@@ -58,6 +58,31 @@ func withStdin(t *testing.T, content string, fn func()) {
 	fn()
 }
 
+// chdirTemp changes the working directory to a fresh temp dir for the rest
+// of the test, restoring the original directory afterward, and returns the
+// *resolved* path to that directory (on macOS, os.Getwd inside it reports
+// the "/private/..." form, which can differ from t.TempDir()'s own return
+// value once symlinks are resolved). "init" operates on the current
+// directory rather than $XDG_CONFIG_HOME, so its tests need this instead
+// of the t.Setenv("XDG_CONFIG_HOME", ...) isolation the rest of this file
+// uses. Mirrors the identical helper in internal/store/store_test.go.
+func chdirTemp(t *testing.T) string {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	return cwd
+}
+
 func TestStringSliceSetAppends(t *testing.T) {
 	var s stringSlice
 	if err := s.Set("a=1"); err != nil {
@@ -693,5 +718,138 @@ func TestCmdVersion(t *testing.T) {
 	out := captureStdout(t, cmdVersion)
 	if !strings.Contains(out, "terman") || !strings.Contains(out, version.Version) {
 		t.Errorf("cmdVersion output = %q, want to contain %q and %q", out, "terman", version.Version)
+	}
+}
+
+func TestCmdInitFreshCreatesSamplesAndPrintsSummary(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cwd := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	out := captureStdout(t, func() {
+		if err := cmdInit(nil); err != nil {
+			t.Fatalf("cmdInit: %v", err)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs", "dev.yaml")); err != nil {
+		t.Errorf("expected envs/dev.yaml to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
+		t.Errorf("expected requests/hello-httpbin.yaml to exist: %v", err)
+	}
+	for _, want := range []string{
+		"Initialized terman store in",
+		`Created environment "dev"`,
+		`Created request "Hello httpbin"`,
+		`Set active environment to "dev"`,
+		`terman run "Hello httpbin"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cmdInit output missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdInitRerunIsNoOp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	captureStdout(t, func() {
+		if err := cmdInit(nil); err != nil {
+			t.Fatalf("cmdInit (first): %v", err)
+		}
+	})
+	out := captureStdout(t, func() {
+		if err := cmdInit(nil); err != nil {
+			t.Fatalf("cmdInit (second): %v", err)
+		}
+	})
+
+	if strings.Contains(out, "Created") {
+		t.Errorf("re-run output should not report anything created, got:\n%s", out)
+	}
+	for _, want := range []string{
+		"terman store already initialized in",
+		`Environment "dev" already exists, left unchanged`,
+		`Request "Hello httpbin" already exists, left unchanged`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("re-run output missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestCmdInitInSubdirCreatesItsOwnStore is the key regression test for why
+// "init" can't just reuse store.BaseDir(): it must always target the
+// current directory (git-init semantics), even inside a subdirectory of an
+// already-initialized project.
+func TestCmdInitInSubdirCreatesItsOwnStore(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	root := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	captureStdout(t, func() {
+		if err := cmdInit(nil); err != nil {
+			t.Fatalf("cmdInit (root): %v", err)
+		}
+	})
+
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	captureStdout(t, func() {
+		if err := cmdInit(nil); err != nil {
+			t.Fatalf("cmdInit (sub): %v", err)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(sub, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
+		t.Errorf("expected a new .terman under %s, got: %v", sub, err)
+	}
+}
+
+func TestCmdInitRespectsXDGConfigHome(t *testing.T) {
+	chdirTemp(t) // a fresh dir with no local .terman
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	if err := cmdInit(nil); err != nil {
+		t.Fatalf("cmdInit: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(xdg, "terman", "requests", "hello-httpbin.yaml")); err != nil {
+		t.Errorf("expected the sample request under $XDG_CONFIG_HOME/terman, got: %v", err)
+	}
+}
+
+func TestCmdInitForceOverwritesEditedSample(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if err := cmdInit(nil); err != nil {
+		t.Fatalf("cmdInit (first): %v", err)
+	}
+	if err := store.SaveRequest(model.Request{Name: "Hello httpbin", Method: "GET", URL: "https://changed.example.com"}, "Hello httpbin", ""); err != nil {
+		t.Fatalf("SaveRequest (edit): %v", err)
+	}
+
+	if err := cmdInit([]string{"--force"}); err != nil {
+		t.Fatalf("cmdInit (force): %v", err)
+	}
+
+	req, err := store.LoadRequest("Hello httpbin")
+	if err != nil {
+		t.Fatalf("LoadRequest: %v", err)
+	}
+	if req.URL != "{{base_url}}/get" {
+		t.Errorf("URL after --force = %q, want the default sample URL restored", req.URL)
 	}
 }

@@ -470,3 +470,213 @@ func TestBaseDirPrefersLocalTermanOverLegacyHomeConfig(t *testing.T) {
 		t.Errorf("BaseDir() = %q, want local %q (should be preferred over the legacy home config)", dir, local)
 	}
 }
+
+func TestInitDirHonorsXDGConfigHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	dir, err := InitDir()
+	if err != nil {
+		t.Fatalf("InitDir: %v", err)
+	}
+	want := filepath.Join(tmp, "terman")
+	if dir != want {
+		t.Errorf("InitDir() = %q, want %q", dir, want)
+	}
+}
+
+// TestInitDirIgnoresAncestorTerman is a deliberate behavioral contrast with
+// TestBaseDirFindsLocalTermanInParentDir: init is git-init-style and must
+// always target the current directory, never an ancestor's ".terman".
+func TestInitDirIgnoresAncestorTerman(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	root := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if err := os.MkdirAll(filepath.Join(root, ".terman"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	dir, err := InitDir()
+	if err != nil {
+		t.Fatalf("InitDir: %v", err)
+	}
+	want := filepath.Join(sub, ".terman")
+	if dir != want {
+		t.Errorf("InitDir() = %q, want %q (should never find the ancestor's .terman)", dir, want)
+	}
+}
+
+// TestInitDirIgnoresLegacyHomeConfig is a deliberate contrast with
+// TestBaseDirFallsBackToHomeConfigWhenItExists: init never falls back to
+// the legacy ~/.config/terman.
+func TestInitDirIgnoresLegacyHomeConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cwd := chdirTemp(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".config", "terman"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	dir, err := InitDir()
+	if err != nil {
+		t.Fatalf("InitDir: %v", err)
+	}
+	want := filepath.Join(cwd, ".terman")
+	if dir != want {
+		t.Errorf("InitDir() = %q, want %q (should never fall back to the legacy home config)", dir, want)
+	}
+}
+
+func TestInitFreshBootstrapCreatesSamplesAndActivatesEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cwd := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	res, err := Init(false)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if !res.CreatedDirs || !res.CreatedEnv || !res.CreatedReq || !res.SetActiveEnv {
+		t.Fatalf("Init() = %+v, want everything created/set on a fresh directory", res)
+	}
+	if res.ActiveEnv != "dev" {
+		t.Errorf("ActiveEnv = %q, want %q", res.ActiveEnv, "dev")
+	}
+
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs", "dev.yaml")); err != nil {
+		t.Errorf("expected envs/dev.yaml to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
+		t.Errorf("expected requests/hello-httpbin.yaml to exist: %v", err)
+	}
+
+	active, err := GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if active != "dev" {
+		t.Errorf("GetActiveEnv() = %q, want %q", active, "dev")
+	}
+
+	req, err := LoadRequest("Hello httpbin")
+	if err != nil {
+		t.Fatalf("LoadRequest: %v", err)
+	}
+	if req.URL != "{{base_url}}/get" {
+		t.Errorf("sample request URL = %q, want %q", req.URL, "{{base_url}}/get")
+	}
+}
+
+func TestInitRerunIsNoOp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := Init(false); err != nil {
+		t.Fatalf("Init (first): %v", err)
+	}
+	res, err := Init(false)
+	if err != nil {
+		t.Fatalf("Init (second): %v", err)
+	}
+	if res.CreatedDirs || res.CreatedEnv || res.CreatedReq || res.SetActiveEnv {
+		t.Errorf("Init() re-run = %+v, want nothing created/changed", res)
+	}
+	if res.ActiveEnv != "dev" {
+		t.Errorf("ActiveEnv on re-run = %q, want %q", res.ActiveEnv, "dev")
+	}
+}
+
+func TestInitRerunRecreatesDeletedSample(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cwd := chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := Init(false); err != nil {
+		t.Fatalf("Init (first): %v", err)
+	}
+	reqPath := filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")
+	if err := os.Remove(reqPath); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	res, err := Init(false)
+	if err != nil {
+		t.Fatalf("Init (second): %v", err)
+	}
+	if res.CreatedDirs || res.CreatedEnv || !res.CreatedReq {
+		t.Errorf("Init() after deleting the sample request = %+v, want only CreatedReq", res)
+	}
+	if _, err := os.Stat(reqPath); err != nil {
+		t.Errorf("expected the sample request to be recreated: %v", err)
+	}
+}
+
+func TestInitDoesNotClobberExistingActiveEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if err := SetActiveEnv("prod"); err != nil {
+		t.Fatalf("SetActiveEnv: %v", err)
+	}
+
+	res, err := Init(false)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if res.SetActiveEnv {
+		t.Errorf("Init() set the active env even though one was already set: %+v", res)
+	}
+	if res.ActiveEnv != "prod" {
+		t.Errorf("ActiveEnv = %q, want unchanged %q", res.ActiveEnv, "prod")
+	}
+	active, err := GetActiveEnv()
+	if err != nil {
+		t.Fatalf("GetActiveEnv: %v", err)
+	}
+	if active != "prod" {
+		t.Errorf("GetActiveEnv() = %q, want %q", active, "prod")
+	}
+}
+
+func TestInitForceOverwritesEditedSamples(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	chdirTemp(t)
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := Init(false); err != nil {
+		t.Fatalf("Init (first): %v", err)
+	}
+
+	edited := model.Request{Name: "Hello httpbin", Method: "GET", URL: "https://changed.example.com"}
+	if err := SaveRequest(edited, "Hello httpbin", ""); err != nil {
+		t.Fatalf("SaveRequest (edit): %v", err)
+	}
+
+	res, err := Init(true)
+	if err != nil {
+		t.Fatalf("Init (force): %v", err)
+	}
+	if !res.CreatedReq || !res.CreatedEnv {
+		t.Errorf("Init(force=true) = %+v, want the samples rewritten", res)
+	}
+
+	req, err := LoadRequest("Hello httpbin")
+	if err != nil {
+		t.Fatalf("LoadRequest: %v", err)
+	}
+	if req.URL != "{{base_url}}/get" {
+		t.Errorf("URL after force re-init = %q, want the default sample URL restored", req.URL)
+	}
+}

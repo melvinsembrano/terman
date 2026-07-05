@@ -119,6 +119,27 @@ func BaseDir() (string, error) {
 	return filepath.Join(cwd, ".terman"), nil
 }
 
+// InitDir returns the terman data root that "terman init" should create:
+//
+//  1. $XDG_CONFIG_HOME/terman, if set — the same override BaseDir honors, so
+//     data lands where later commands will find it.
+//  2. "./.terman" in the current directory.
+//
+// Unlike BaseDir, it never walks up to an ancestor ".terman" and never falls
+// back to the legacy ~/.config/terman: init behaves like "git init", always
+// targeting the current directory, even inside a subdirectory of an
+// existing project-local store.
+func InitDir() (string, error) {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "terman"), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cwd, ".terman"), nil
+}
+
 func RequestsDir() (string, error) {
 	base, err := BaseDir()
 	if err != nil {
@@ -449,11 +470,9 @@ type localConfig struct {
 	ActiveEnv string `yaml:"active_env,omitempty"`
 }
 
-func loadConfig() (localConfig, error) {
-	path, err := configPath()
-	if err != nil {
-		return localConfig{}, err
-	}
+// loadConfigAt reads the local config at path, or a zero-value localConfig
+// if it doesn't exist yet.
+func loadConfigAt(path string) (localConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -468,15 +487,28 @@ func loadConfig() (localConfig, error) {
 	return c, nil
 }
 
-func saveConfig(c localConfig) error {
-	base, err := BaseDir()
-	if err != nil {
-		return err
-	}
-	if err := ensureDir(base); err != nil {
+// saveConfigAt writes c to path, creating dir (path's parent) if needed.
+func saveConfigAt(dir, path string, c localConfig) error {
+	if err := ensureDir(dir); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func loadConfig() (localConfig, error) {
+	path, err := configPath()
+	if err != nil {
+		return localConfig{}, err
+	}
+	return loadConfigAt(path)
+}
+
+func saveConfig(c localConfig) error {
+	base, err := BaseDir()
 	if err != nil {
 		return err
 	}
@@ -484,7 +516,7 @@ func saveConfig(c localConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return saveConfigAt(base, path, c)
 }
 
 // GetActiveEnv returns the name of the currently active environment, or
@@ -505,4 +537,143 @@ func SetActiveEnv(name string) error {
 	}
 	c.ActiveEnv = name
 	return saveConfig(c)
+}
+
+const (
+	sampleEnvName = "dev"
+	sampleReqName = "Hello httpbin"
+)
+
+// sampleEnv and sampleRequest are the "terman init" starter content: a
+// no-auth, no-signup demo (httpbin.org echoes back whatever you send) that
+// works immediately after init, and demonstrates {{var}} substitution.
+func sampleEnv() model.Environment {
+	return model.Environment{
+		Name: sampleEnvName,
+		Vars: map[string]string{"base_url": "https://httpbin.org"},
+	}
+}
+
+func sampleRequest() model.Request {
+	return model.Request{
+		Name:    sampleReqName,
+		Method:  "GET",
+		URL:     "{{base_url}}/get",
+		Headers: map[string]string{"Accept": "application/json"},
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// InitResult reports what Init created versus what already existed and was
+// left untouched, so the caller can print an accurate summary.
+type InitResult struct {
+	BaseDir string // the resolved data root (InitDir())
+
+	CreatedDirs bool // the .terman tree didn't fully exist and was created
+
+	RequestName   string
+	RequestMethod string
+	RequestURL    string
+	CreatedReq    bool // sample request was (re)written, vs. already present
+
+	EnvName    string
+	EnvBaseURL string
+	CreatedEnv bool // sample environment was (re)written, vs. already present
+
+	SetActiveEnv bool   // true if Init set the active env (none was set before)
+	ActiveEnv    string // the active env after Init (the existing one, if one was already set)
+}
+
+// Init bootstraps a project-local terman store in the directory InitDir
+// resolves to (never BaseDir — see InitDir's doc comment): it creates the
+// requests/ and envs/ subtrees, and — only when an item of that exact name
+// doesn't already exist, or force is true — seeds one sample environment
+// and one sample request that uses it. It is safe to re-run: existing user
+// data, including a previously-created sample that's since been hand-
+// edited, is never overwritten unless force is set. When no active
+// environment is set yet, the sample environment is made active. The
+// returned InitResult describes exactly what happened, for the caller to
+// report back.
+func Init(force bool) (InitResult, error) {
+	base, err := InitDir()
+	if err != nil {
+		return InitResult{}, err
+	}
+	env, req := sampleEnv(), sampleRequest()
+	res := InitResult{
+		BaseDir:       base,
+		RequestName:   req.Name,
+		RequestMethod: req.Method,
+		RequestURL:    req.URL,
+		EnvName:       env.Name,
+		EnvBaseURL:    env.Vars["base_url"],
+	}
+
+	if info, statErr := os.Stat(base); statErr == nil {
+		if !info.IsDir() {
+			return InitResult{}, fmt.Errorf("%s exists but is not a directory", base)
+		}
+	} else if os.IsNotExist(statErr) {
+		res.CreatedDirs = true
+	} else {
+		return InitResult{}, statErr
+	}
+
+	requestsDir := filepath.Join(base, "requests")
+	envsDir := filepath.Join(base, "envs")
+	if err := ensureDir(requestsDir); err != nil {
+		return InitResult{}, err
+	}
+	if err := ensureDir(envsDir); err != nil {
+		return InitResult{}, err
+	}
+
+	envPath := filepath.Join(envsDir, slug(env.Name)+".yaml")
+	if force || !fileExists(envPath) {
+		data, err := yaml.Marshal(env)
+		if err != nil {
+			return InitResult{}, err
+		}
+		if err := os.WriteFile(envPath, data, 0o644); err != nil {
+			return InitResult{}, err
+		}
+		res.CreatedEnv = true
+	}
+
+	reqPath := requestPath(requestsDir, req.Group, req.Name)
+	if force || !fileExists(reqPath) {
+		data, err := yaml.Marshal(req)
+		if err != nil {
+			return InitResult{}, err
+		}
+		if err := ensureDir(filepath.Dir(reqPath)); err != nil {
+			return InitResult{}, err
+		}
+		if err := os.WriteFile(reqPath, data, 0o644); err != nil {
+			return InitResult{}, err
+		}
+		res.CreatedReq = true
+	}
+
+	cfgPath := filepath.Join(base, "config.yaml")
+	cfg, err := loadConfigAt(cfgPath)
+	if err != nil {
+		return InitResult{}, err
+	}
+	if cfg.ActiveEnv == "" {
+		cfg.ActiveEnv = env.Name
+		if err := saveConfigAt(base, cfgPath, cfg); err != nil {
+			return InitResult{}, err
+		}
+		res.SetActiveEnv = true
+		res.ActiveEnv = env.Name
+	} else {
+		res.ActiveEnv = cfg.ActiveEnv
+	}
+
+	return res, nil
 }
