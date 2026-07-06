@@ -1,0 +1,4 @@
+name: PATCH Partial Update
+method: PATCH
+url: '{{base_url}}/patch'
+body: '{"status": "patched"}'

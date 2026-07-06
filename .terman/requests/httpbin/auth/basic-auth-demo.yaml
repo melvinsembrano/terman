@@ -1,0 +1,5 @@
+name: Basic Auth Demo
+method: GET
+url: https://httpbin.org/basic-auth/demo/pass123
+headers:
+  Authorization: "Basic ZGVtbzpwYXNzMTIz"

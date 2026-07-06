@@ -1,0 +1,4 @@
+name: github
+vars:
+  github_user: torvalds
+  github_token: ghp_replace_with_your_token

@@ -1,0 +1,3 @@
+name: Search Repositories
+method: GET
+url: 'https://api.github.com/search/repositories?q=terminal+http+client&sort=stars'

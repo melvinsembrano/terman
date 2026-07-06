@@ -1,0 +1,3 @@
+name: Delayed Response (2s)
+method: GET
+url: '{{base_url}}/delay/2'

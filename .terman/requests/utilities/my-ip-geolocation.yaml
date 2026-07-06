@@ -1,0 +1,3 @@
+name: My IP Geolocation
+method: GET
+url: https://ipapi.co/json

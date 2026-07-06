@@ -1,0 +1,4 @@
+name: PUT Update
+method: PUT
+url: '{{base_url}}/put'
+body: '{"status": "updated"}'

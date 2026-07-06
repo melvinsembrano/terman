@@ -1,0 +1,3 @@
+name: Random Kanye Quote
+method: GET
+url: https://api.kanye.rest

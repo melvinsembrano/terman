@@ -1,0 +1,5 @@
+name: Hello httpbin
+method: GET
+url: '{{base_url}}/get'
+headers:
+    Accept: application/json

@@ -1,0 +1,3 @@
+name: Random User Profile
+method: GET
+url: https://randomuser.me/api/

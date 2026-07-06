@@ -1,0 +1,3 @@
+name: USD Exchange Rates
+method: GET
+url: https://open.er-api.com/v6/latest/USD

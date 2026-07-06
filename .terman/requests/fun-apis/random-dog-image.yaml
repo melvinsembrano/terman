@@ -1,0 +1,3 @@
+name: Random Dog Image
+method: GET
+url: https://dog.ceo/api/breeds/image/random

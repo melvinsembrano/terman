@@ -1,0 +1,3 @@
+name: Current Weather (Manila)
+method: GET
+url: 'https://api.open-meteo.com/v1/forecast?latitude=14.6&longitude=120.98&current_weather=true'

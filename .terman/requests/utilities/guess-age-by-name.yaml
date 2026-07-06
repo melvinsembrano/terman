@@ -1,0 +1,3 @@
+name: Guess Age By Name
+method: GET
+url: 'https://api.agify.io?name=michael'

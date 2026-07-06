@@ -1,0 +1,3 @@
+name: Redirect Chain (3 hops)
+method: GET
+url: '{{base_url}}/redirect/3'

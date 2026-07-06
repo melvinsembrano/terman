@@ -1,0 +1,3 @@
+name: GET Anything
+method: GET
+url: '{{base_url}}/get?msg=hello'

@@ -1,0 +1,3 @@
+name: Simulate Server Error (500)
+method: GET
+url: '{{base_url}}/status/500'

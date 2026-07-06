@@ -1,0 +1,5 @@
+name: Get Authenticated User (needs your token)
+method: GET
+url: https://api.github.com/user
+headers:
+  Authorization: 'Bearer {{github_token}}'

@@ -1,0 +1,3 @@
+name: Random Trivia Question
+method: GET
+url: 'https://opentdb.com/api.php?amount=1'

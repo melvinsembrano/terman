@@ -1,0 +1,6 @@
+name: POST JSON Body
+method: POST
+url: '{{base_url}}/post'
+headers:
+  Content-Type: application/json
+body: '{"key": "value"}'

@@ -1,0 +1,5 @@
+name: Bearer Token Demo
+method: GET
+url: https://httpbin.org/bearer
+headers:
+  Authorization: Bearer demo-token-123
