@@ -1,6 +1,5 @@
 # Binaries
 /terman
-*.exe
 *.exe~
 *.dll
 *.so
@@ -27,8 +26,13 @@ go.work.sum
 .idea/
 .vscode/
 
-# Ignore terman binaries for all platforms
+# Ignore terman build artifacts (archives and checksums produced by build-binaries.sh)
+terman-*.tar.gz
+terman-*.zip
+checksums.txt
+# Old bare binary names (replaced by versioned archives)
 terman-linux
 terman-linux-arm
 terman-mac
 terman-mac-arm
+terman.exe

@@ -47,26 +47,34 @@ where `.terman` ends up and how that's decided.
 
 ## Install
 
-### Pre-built binaries
-
-Download the binary for your platform from the
-[latest release](https://github.com/melvinsembrano/terman/releases/latest):
-
-| Platform                     | Binary              |
-|-------------------------------|---------------------|
-| Linux (amd64)                 | `terman-linux`      |
-| Linux (arm64)                 | `terman-linux-arm`  |
-| macOS (amd64, Intel)          | `terman-mac`        |
-| macOS (arm64, Apple Silicon)  | `terman-mac-arm`    |
-| Windows (amd64)               | `terman.exe`        |
-
-macOS/Linux — download, make it executable, and put it on your `PATH`
-(example for Apple Silicon macOS):
+### Homebrew (macOS and Linux)
 
 ```sh
-curl -LO https://github.com/melvinsembrano/terman/releases/latest/download/terman-mac-arm
-chmod +x terman-mac-arm
-sudo mv terman-mac-arm /usr/local/bin/terman
+brew tap melvinsembrano/terman
+brew install terman
+```
+
+### Pre-built binaries
+
+Download the archive for your platform from the
+[latest release](https://github.com/melvinsembrano/terman/releases/latest):
+
+| Platform                     | Archive                              |
+|------------------------------|--------------------------------------|
+| Linux (amd64)                | `terman-<version>-linux-amd64.tar.gz`  |
+| Linux (arm64)                | `terman-<version>-linux-arm64.tar.gz`  |
+| macOS (amd64, Intel)         | `terman-<version>-darwin-amd64.tar.gz` |
+| macOS (arm64, Apple Silicon) | `terman-<version>-darwin-arm64.tar.gz` |
+| Windows (amd64)              | `terman-<version>-windows-amd64.zip`   |
+
+macOS/Linux — extract and put the binary on your `PATH`
+(example for Apple Silicon macOS, replace `<version>` with the actual version):
+
+```sh
+curl -LO https://github.com/melvinsembrano/terman/releases/latest/download/terman-<version>-darwin-arm64.tar.gz
+tar xzf terman-<version>-darwin-arm64.tar.gz
+chmod +x terman
+sudo mv terman /usr/local/bin/terman
 ```
 
 macOS only: these binaries aren't code-signed, so Gatekeeper will refuse to
@@ -78,9 +86,9 @@ place:
 xattr -d com.apple.quarantine /usr/local/bin/terman
 ```
 
-Windows: download `terman.exe` from the same
+Windows: extract `terman-<version>-windows-amd64.zip` from the
 [latest release](https://github.com/melvinsembrano/terman/releases/latest)
-page and run it directly, or add its folder to your `PATH`.
+page and run `terman.exe` directly, or add its folder to your `PATH`.
 
 ### Using `go install`
 
