@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,13 +25,19 @@ import (
 const dividerWidth = 40
 
 // responseViewportTop is the absolute terminal row (from the top of the
-// screen) where the response viewport's own content begins: the app's own
-// header (headerLines) plus this screen's title line and the blank line
-// View() puts after it — mirrors envRowsContentTop's
-// "headerLines + <this screen's own fixed chrome>" pattern in
-// enveditor.go, since this screen also renders its own layout rather than
-// relying on an unexported bubbles view method.
-const responseViewportTop = headerLines + 2
+// screen) where the response viewport's own content begins.
+//
+// The app header is "terman…\n" + "divider\n" — two newlines, which puts
+// body content starting at terminal row 2, not row 3.  headerLines = 3
+// (lipgloss.Height counts trailing-newline strings as one line taller than
+// their visible row count), so it over-counts by one.  The response View()
+// then adds a title line and one blank line ("\n\n") before the viewport,
+// contributing 2 more rows.  Net: viewport starts at row 2 + 2 = 4, which
+// equals headerLines - 1 + 2 = headerLines + 1.
+//
+// Concretely: header(2 visible rows) + title(1) + blank(1) = 4 rows before
+// the viewport, so terminal row 4 is viewport content row 0.
+const responseViewportTop = headerLines + 1
 
 // runResultMsg carries the outcome of an asynchronously executed request
 // back into the Bubble Tea update loop.
@@ -65,10 +75,13 @@ type responseScreen struct {
 	lines  []jsonview.Line
 	cursor int
 
+	rawBody   string // original response body, used for copy/editor commands
 	plainBody string // set when the body isn't JSON (or is empty)
 
 	spinner spinner.Model
 	running bool // true while a request is in flight; drives the spinner view
+
+	statusMsg string // transient one-line feedback (e.g. "copied!")
 }
 
 func newResponseScreen() responseScreen {
@@ -80,7 +93,11 @@ func newResponseScreen() responseScreen {
 
 func (s *responseScreen) setSize(w, h int) {
 	s.vp.Width = w
-	s.vp.Height = h
+	// Reserve 4 rows for this screen's own chrome: title line + blank line
+	// (2 rows above the viewport in View()) and the "\n" separator + hints
+	// bar (2 rows below). Without this the viewport thinks it's taller than
+	// its visible area, throwing off scroll offsets and click-to-line math.
+	s.vp.Height = h - 4
 }
 
 // showRunning marks the screen as waiting on an in-flight request and
@@ -113,6 +130,7 @@ func (s *responseScreen) showResult(name string, resp httpx.Response) {
 	s.isJSON = false
 	s.root = nil
 	s.lines = nil
+	s.rawBody = resp.Body
 	s.plainBody = ""
 	s.cursor = 0
 
@@ -319,6 +337,69 @@ func (s *responseScreen) toggleFold() {
 	s.ensureCursorVisible()
 }
 
+// editorFinishedMsg is sent back to the update loop after the external editor
+// process exits (successfully or not).
+type editorFinishedMsg struct{ err error }
+
+// prettyBody returns the response body formatted for copying/editing. JSON
+// bodies are pretty-printed; everything else is returned as-is.
+func (s *responseScreen) prettyBody() string {
+	if s.isJSON && strings.TrimSpace(s.rawBody) != "" {
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, []byte(s.rawBody), "", "  "); err == nil {
+			return buf.String()
+		}
+	}
+	return s.rawBody
+}
+
+// copyBodyCmd copies the (pretty-printed) response body to the system
+// clipboard and returns a Cmd that delivers a statusMsg back to the screen.
+func (s *responseScreen) copyBodyCmd() tea.Cmd {
+	body := s.prettyBody()
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(body); err != nil {
+			return responseStatusMsg("copy failed: " + err.Error())
+		}
+		return responseStatusMsg("copied!")
+	}
+}
+
+// responseStatusMsg carries a one-line transient status update for the
+// response screen (e.g. "copied!" after a clipboard write).
+type responseStatusMsg string
+
+// openEditorCmd writes the body to a temp file and opens it in the user's
+// preferred editor ($VISUAL, then $EDITOR, then vi).
+func (s *responseScreen) openEditorCmd() tea.Cmd {
+	body := s.prettyBody()
+	ext := ".txt"
+	if s.isJSON {
+		ext = ".json"
+	}
+	f, err := os.CreateTemp("", "terman-response-*"+ext)
+	if err != nil {
+		return func() tea.Msg { return editorFinishedMsg{err} }
+	}
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return func() tea.Msg { return editorFinishedMsg{err} }
+	}
+	f.Close()
+
+	editorBin := os.Getenv("VISUAL")
+	if editorBin == "" {
+		editorBin = os.Getenv("EDITOR")
+	}
+	if editorBin == "" {
+		editorBin = "vi"
+	}
+	c := exec.Command(editorBin, f.Name())
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorFinishedMsg{err}
+	})
+}
+
 func (s responseScreen) Update(msg tea.Msg) (responseScreen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
@@ -328,6 +409,14 @@ func (s responseScreen) Update(msg tea.Msg) (responseScreen, tea.Cmd) {
 		var cmd tea.Cmd
 		s.spinner, cmd = s.spinner.Update(msg)
 		return s, cmd
+	case responseStatusMsg:
+		s.statusMsg = string(msg)
+		return s, nil
+	case editorFinishedMsg:
+		// Editor exited; nothing to update in the model (the file was
+		// read-only from the user's perspective). Errors are silently
+		// dropped — the user already saw them in their terminal.
+		return s, nil
 	case tea.MouseMsg:
 		if s.isJSON && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			if idx, ok := s.lineAtY(msg.Y); ok {
@@ -338,6 +427,15 @@ func (s responseScreen) Update(msg tea.Msg) (responseScreen, tea.Cmd) {
 			}
 		}
 	case tea.KeyMsg:
+		if !s.running && s.rawBody != "" {
+			switch msg.String() {
+			case "c":
+				s.statusMsg = "" // clear before async result arrives
+				return s, s.copyBodyCmd()
+			case "e":
+				return s, s.openEditorCmd()
+			}
+		}
 		if s.isJSON {
 			switch msg.String() {
 			case "up":
@@ -375,6 +473,13 @@ func (s responseScreen) View() string {
 	if s.isJSON {
 		hints = append(hints, keyHint{"click", "select"}, keyHint{"enter/space", "fold"})
 	}
+	if s.rawBody != "" {
+		hints = append(hints, keyHint{"c", "copy"}, keyHint{"e", "editor"})
+	}
 	hints = append(hints, keyHint{"esc", "back"})
-	return titleStyle.Render(s.title) + "\n\n" + s.vp.View() + "\n" + renderHints(hints...)
+	hintsLine := renderHints(hints...)
+	if s.statusMsg != "" {
+		hintsLine = subtleStyle.Render(s.statusMsg) + "  " + hintsLine
+	}
+	return titleStyle.Render(s.title) + "\n\n" + s.vp.View() + "\n" + hintsLine
 }
