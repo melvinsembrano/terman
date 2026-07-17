@@ -309,19 +309,10 @@ TAPREADME
   fi
 
   # Patch version and sha256 values in-place.
-  # The formula uses distinct placeholder-or-previous sha256 lines per platform,
-  # identified by the surrounding on_* context. We use perl for reliable
-  # multi-line-aware sed-style replacements.
-  perl -i -pe "
-    s|^(  version \").*(\")|\${1}${VERSION}\${2}|;
-    s|PLACEHOLDER_DARWIN_AMD64|${SHA_DARWIN_AMD64}|;
-    s|PLACEHOLDER_DARWIN_ARM64|${SHA_DARWIN_ARM64}|;
-    s|PLACEHOLDER_LINUX_AMD64|${SHA_LINUX_AMD64}|;
-    s|PLACEHOLDER_LINUX_ARM64|${SHA_LINUX_ARM64}|;
-  " "$FORMULA_PATH"
-
-  # Replace previous real SHA values too (for subsequent releases).
-  # Strategy: rewrite every sha256 line by matching the URL on the preceding line.
+  # The formula URLs use Ruby interpolation (#{version}), so we normalise that
+  # to the literal version string when looking up the correct SHA.  This single
+  # Python pass handles both the first release (PLACEHOLDER_* values) and all
+  # subsequent releases (real hex values from the previous release).
   python3 - "$FORMULA_PATH" "$VERSION" \
     "$SHA_DARWIN_AMD64" "$SHA_DARWIN_ARM64" \
     "$SHA_LINUX_AMD64"  "$SHA_LINUX_ARM64"  <<'PYSCRIPT'
@@ -343,10 +334,21 @@ out = []
 i = 0
 while i < len(lines):
     line = lines[i]
+
+    # Update the version line.
+    if re.match(r'\s+version\s+"', line):
+        indent = re.match(r'(\s+)', line).group(1)
+        out.append(f'{indent}version "{ver}"\n')
+        i += 1
+        continue
+
     # If this line is a url line, look ahead for the sha256 line and update it.
-    m = re.match(r'(\s+url\s+"[^"]*terman-[^"]+/([^"]+)")', line)
+    # Match the archive filename at the end of the URL (after the last /).
+    # Normalise #{version} to the literal version so the filename lookup works
+    # on every release, not just the first one.
+    m = re.match(r'\s+url\s+".*/(terman-[^"]+\.(?:tar\.gz|zip))"', line)
     if m:
-        fname = m.group(2)
+        fname = m.group(1).replace("#{version}", ver)
         out.append(line)
         i += 1
         if i < len(lines) and re.match(r'\s+sha256\s+"', lines[i]):
@@ -357,15 +359,13 @@ while i < len(lines):
                 out.append(lines[i])
             i += 1
         continue
+
     out.append(line)
     i += 1
 
 with open(path, 'w') as f:
     f.writelines(out)
 PYSCRIPT
-
-  # Also update the version line.
-  perl -i -pe "s|^(  version \").*(\")|\${1}${VERSION}\${2}|" "$FORMULA_PATH"
 
   cd "$TAP_TMPDIR/tap"
   git add "$TAP_FORMULA"
