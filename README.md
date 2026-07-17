@@ -51,6 +51,7 @@ where `.terman` ends up and how that's decided.
 
 ```sh
 brew tap melvinsembrano/terman
+brew trust melvinsembrano/terman
 brew install terman
 ```
 
