@@ -537,43 +537,44 @@ func TestInitDirIgnoresLegacyHomeConfig(t *testing.T) {
 	}
 }
 
-func TestInitFreshBootstrapCreatesSamplesAndActivatesEnv(t *testing.T) {
+func TestInitFreshBootstrapCreatesDirsOnly(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	cwd := chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
 
-	res, err := Init(false)
+	res, err := Init(false, false)
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if !res.CreatedDirs || !res.CreatedEnv || !res.CreatedReq || !res.SetActiveEnv {
-		t.Fatalf("Init() = %+v, want everything created/set on a fresh directory", res)
+	if !res.CreatedDirs {
+		t.Fatalf("Init() = %+v, want CreatedDirs=true on a fresh directory", res)
 	}
-	if res.ActiveEnv != "dev" {
-		t.Errorf("ActiveEnv = %q, want %q", res.ActiveEnv, "dev")
-	}
-
-	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs", "dev.yaml")); err != nil {
-		t.Errorf("expected envs/dev.yaml to exist: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
-		t.Errorf("expected requests/hello-httpbin.yaml to exist: %v", err)
+	if res.CreatedEnv || res.CreatedReq || res.SetActiveEnv {
+		t.Fatalf("Init() = %+v, want no samples or active env without --examples", res)
 	}
 
-	active, err := GetActiveEnv()
+	// requests/ and envs/ subdirs must exist.
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs")); err != nil {
+		t.Errorf("expected envs/ dir to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests")); err != nil {
+		t.Errorf("expected requests/ dir to exist: %v", err)
+	}
+
+	// No sample files should have been created.
+	entries, err := os.ReadDir(filepath.Join(cwd, ".terman", "envs"))
 	if err != nil {
-		t.Fatalf("GetActiveEnv: %v", err)
+		t.Fatalf("ReadDir envs: %v", err)
 	}
-	if active != "dev" {
-		t.Errorf("GetActiveEnv() = %q, want %q", active, "dev")
+	if len(entries) != 0 {
+		t.Errorf("expected empty envs/ dir, got %d entries", len(entries))
 	}
-
-	req, err := LoadRequest("Hello httpbin")
+	entries, err = os.ReadDir(filepath.Join(cwd, ".terman", "requests"))
 	if err != nil {
-		t.Fatalf("LoadRequest: %v", err)
+		t.Fatalf("ReadDir requests: %v", err)
 	}
-	if req.URL != "{{base_url}}/get" {
-		t.Errorf("sample request URL = %q, want %q", req.URL, "{{base_url}}/get")
+	if len(entries) != 0 {
+		t.Errorf("expected empty requests/ dir, got %d entries", len(entries))
 	}
 }
 
@@ -582,43 +583,47 @@ func TestInitRerunIsNoOp(t *testing.T) {
 	chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
 
-	if _, err := Init(false); err != nil {
+	if _, err := Init(false, false); err != nil {
 		t.Fatalf("Init (first): %v", err)
 	}
-	res, err := Init(false)
+	res, err := Init(false, false)
 	if err != nil {
 		t.Fatalf("Init (second): %v", err)
 	}
 	if res.CreatedDirs || res.CreatedEnv || res.CreatedReq || res.SetActiveEnv {
 		t.Errorf("Init() re-run = %+v, want nothing created/changed", res)
 	}
-	if res.ActiveEnv != "dev" {
-		t.Errorf("ActiveEnv on re-run = %q, want %q", res.ActiveEnv, "dev")
-	}
 }
 
 func TestInitRerunRecreatesDeletedSample(t *testing.T) {
+	// This test seeds files manually to simulate existing content, then checks
+	// that a plain re-init (no --examples) does not recreate them.
 	t.Setenv("XDG_CONFIG_HOME", "")
 	cwd := chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
 
-	if _, err := Init(false); err != nil {
+	if _, err := Init(false, false); err != nil {
 		t.Fatalf("Init (first): %v", err)
 	}
-	reqPath := filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")
-	if err := os.Remove(reqPath); err != nil {
-		t.Fatalf("Remove: %v", err)
+
+	// Manually place a request file to simulate pre-existing content.
+	reqDir := filepath.Join(cwd, ".terman", "requests")
+	reqPath := filepath.Join(reqDir, "hello-httpbin.yaml")
+	if err := os.WriteFile(reqPath, []byte("name: Hello httpbin\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
-	res, err := Init(false)
+	res, err := Init(false, false)
 	if err != nil {
 		t.Fatalf("Init (second): %v", err)
 	}
-	if res.CreatedDirs || res.CreatedEnv || !res.CreatedReq {
-		t.Errorf("Init() after deleting the sample request = %+v, want only CreatedReq", res)
+	// Without --examples, no files should be created regardless.
+	if res.CreatedDirs || res.CreatedEnv || res.CreatedReq {
+		t.Errorf("Init() without --examples = %+v, want nothing created", res)
 	}
+	// The manually-placed file must still exist (not removed).
 	if _, err := os.Stat(reqPath); err != nil {
-		t.Errorf("expected the sample request to be recreated: %v", err)
+		t.Errorf("expected manually-placed request to still exist: %v", err)
 	}
 }
 
@@ -631,15 +636,16 @@ func TestInitDoesNotClobberExistingActiveEnv(t *testing.T) {
 		t.Fatalf("SetActiveEnv: %v", err)
 	}
 
-	res, err := Init(false)
+	res, err := Init(false, false)
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if res.SetActiveEnv {
 		t.Errorf("Init() set the active env even though one was already set: %+v", res)
 	}
-	if res.ActiveEnv != "prod" {
-		t.Errorf("ActiveEnv = %q, want unchanged %q", res.ActiveEnv, "prod")
+	// Without --examples, ActiveEnv is not populated in the result.
+	if res.ActiveEnv != "" {
+		t.Errorf("ActiveEnv = %q, want empty (no examples mode)", res.ActiveEnv)
 	}
 	active, err := GetActiveEnv()
 	if err != nil {
@@ -651,32 +657,21 @@ func TestInitDoesNotClobberExistingActiveEnv(t *testing.T) {
 }
 
 func TestInitForceOverwritesEditedSamples(t *testing.T) {
+	// Without --examples, --force alone has no effect on sample content
+	// (there's nothing to overwrite). This test verifies the dirs are still
+	// created on a fresh store and nothing else happens.
 	t.Setenv("XDG_CONFIG_HOME", "")
 	chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
 
-	if _, err := Init(false); err != nil {
-		t.Fatalf("Init (first): %v", err)
-	}
-
-	edited := model.Request{Name: "Hello httpbin", Method: "GET", URL: "https://changed.example.com"}
-	if err := SaveRequest(edited, "Hello httpbin", ""); err != nil {
-		t.Fatalf("SaveRequest (edit): %v", err)
-	}
-
-	res, err := Init(true)
+	res, err := Init(true, false)
 	if err != nil {
-		t.Fatalf("Init (force): %v", err)
+		t.Fatalf("Init (force, no examples): %v", err)
 	}
-	if !res.CreatedReq || !res.CreatedEnv {
-		t.Errorf("Init(force=true) = %+v, want the samples rewritten", res)
+	if !res.CreatedDirs {
+		t.Errorf("Init(force=true) = %+v, want CreatedDirs=true on fresh dir", res)
 	}
-
-	req, err := LoadRequest("Hello httpbin")
-	if err != nil {
-		t.Fatalf("LoadRequest: %v", err)
-	}
-	if req.URL != "{{base_url}}/get" {
-		t.Errorf("URL after force re-init = %q, want the default sample URL restored", req.URL)
+	if res.CreatedReq || res.CreatedEnv {
+		t.Errorf("Init(force=true, examples=false) = %+v, want no samples written", res)
 	}
 }

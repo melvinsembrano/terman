@@ -67,7 +67,7 @@ func printUsage() {
 
 Usage:
   terman                                Launch the TUI
-  terman init [--force]                 Set up .terman here with a sample request + env
+  terman init [--force] [--examples]        Set up .terman here (use --examples to seed sample requests + envs)
   terman run <name> [flags]             Run a saved request
   terman list                           List saved requests
   terman env list                       List saved environments
@@ -102,8 +102,9 @@ the current directory. Set $XDG_CONFIG_HOME to override this explicitly.
 
 "init" always targets ./.terman in the current directory specifically
 (never a parent's, even inside a subdirectory of an existing project) and
-is safe to run again later: it only fills in whatever is missing and never
-overwrites an existing request or environment, unless --force is given.
+is safe to run again later: it only creates whatever is missing. Pass
+--examples to seed example requests and environments fetched from the
+terman GitHub repository; --force overwrites any files that already exist.
 `)
 }
 
@@ -154,12 +155,13 @@ func upsertEnvVars(name string, overrides map[string]string) error {
 // was created versus what was already there.
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	force := fs.Bool("force", false, "overwrite the sample request and environment even if they already exist")
+	force := fs.Bool("force", false, "overwrite existing files")
+	examples := fs.Bool("examples", false, "seed example requests and environments from github.com/melvinsembrano/terman")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	res, err := store.Init(*force)
+	res, err := store.Init(*force, *examples)
 	if err != nil {
 		return err
 	}
@@ -170,25 +172,25 @@ func cmdInit(args []string) error {
 		fmt.Printf("terman store already initialized in %s\n", res.BaseDir)
 	}
 
-	if res.CreatedEnv {
-		fmt.Printf("Created environment %q (base_url=%s)\n", res.EnvName, res.EnvBaseURL)
-	} else {
-		fmt.Printf("Environment %q already exists, left unchanged\n", res.EnvName)
+	if *examples {
+		if len(res.FetchedFiles) > 0 {
+			fmt.Printf("Fetched %d example file(s):\n", len(res.FetchedFiles))
+			for _, f := range res.FetchedFiles {
+				fmt.Printf("  %s\n", f)
+			}
+		} else {
+			fmt.Println("No new example files fetched (all already present; use --force to overwrite)")
+		}
+		if res.SetActiveEnv {
+			fmt.Printf("Set active environment to %q\n", res.ActiveEnv)
+		} else if res.ActiveEnv != "" {
+			fmt.Printf("Active environment is %q, left unchanged\n", res.ActiveEnv)
+		}
+		if len(res.FetchedFiles) > 0 {
+			fmt.Printf("\nTry it:  terman list\n")
+		}
 	}
 
-	if res.CreatedReq {
-		fmt.Printf("Created request %q (%s %s)\n", res.RequestName, res.RequestMethod, res.RequestURL)
-	} else {
-		fmt.Printf("Request %q already exists, left unchanged\n", res.RequestName)
-	}
-
-	if res.SetActiveEnv {
-		fmt.Printf("Set active environment to %q\n", res.ActiveEnv)
-	} else {
-		fmt.Printf("Active environment is %q, left unchanged\n", res.ActiveEnv)
-	}
-
-	fmt.Printf("\nTry it:  terman run %q\n", res.RequestName)
 	return nil
 }
 

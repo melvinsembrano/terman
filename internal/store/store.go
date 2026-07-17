@@ -9,7 +9,10 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -586,32 +589,25 @@ type InitResult struct {
 
 	SetActiveEnv bool   // true if Init set the active env (none was set before)
 	ActiveEnv    string // the active env after Init (the existing one, if one was already set)
+
+	FetchedFiles []string // files downloaded from GitHub when --examples was used
 }
 
 // Init bootstraps a project-local terman store in the directory InitDir
 // resolves to (never BaseDir — see InitDir's doc comment): it creates the
-// requests/ and envs/ subtrees, and — only when an item of that exact name
-// doesn't already exist, or force is true — seeds one sample environment
-// and one sample request that uses it. It is safe to re-run: existing user
-// data, including a previously-created sample that's since been hand-
-// edited, is never overwritten unless force is set. When no active
-// environment is set yet, the sample environment is made active. The
-// returned InitResult describes exactly what happened, for the caller to
-// report back.
-func Init(force bool) (InitResult, error) {
+// requests/ and envs/ subtrees. When examples is true, example files are
+// fetched from the terman GitHub repository and written into the store; the
+// first environment found is made active when none was previously set. When
+// examples is false (the default), no sample files are seeded and the active
+// environment is not touched. It is safe to re-run: existing user data is
+// never overwritten unless force is set. The returned InitResult describes
+// exactly what happened, for the caller to report back.
+func Init(force, examples bool) (InitResult, error) {
 	base, err := InitDir()
 	if err != nil {
 		return InitResult{}, err
 	}
-	env, req := sampleEnv(), sampleRequest()
-	res := InitResult{
-		BaseDir:       base,
-		RequestName:   req.Name,
-		RequestMethod: req.Method,
-		RequestURL:    req.URL,
-		EnvName:       env.Name,
-		EnvBaseURL:    env.Vars["base_url"],
-	}
+	res := InitResult{BaseDir: base}
 
 	if info, statErr := os.Stat(base); statErr == nil {
 		if !info.IsDir() {
@@ -632,48 +628,131 @@ func Init(force bool) (InitResult, error) {
 		return InitResult{}, err
 	}
 
-	envPath := filepath.Join(envsDir, slug(env.Name)+".yaml")
-	if force || !fileExists(envPath) {
-		data, err := yaml.Marshal(env)
+	if examples {
+		fetched, firstEnv, err := fetchExamples(base, force)
 		if err != nil {
 			return InitResult{}, err
 		}
-		if err := os.WriteFile(envPath, data, 0o644); err != nil {
-			return InitResult{}, err
-		}
-		res.CreatedEnv = true
-	}
+		res.FetchedFiles = fetched
 
-	reqPath := requestPath(requestsDir, req.Group, req.Name)
-	if force || !fileExists(reqPath) {
-		data, err := yaml.Marshal(req)
-		if err != nil {
-			return InitResult{}, err
+		// Set the active environment to the first env fetched, if none is set.
+		if firstEnv != "" {
+			cfgPath := filepath.Join(base, "config.yaml")
+			cfg, err := loadConfigAt(cfgPath)
+			if err != nil {
+				return InitResult{}, err
+			}
+			if cfg.ActiveEnv == "" {
+				cfg.ActiveEnv = firstEnv
+				if err := saveConfigAt(base, cfgPath, cfg); err != nil {
+					return InitResult{}, err
+				}
+				res.SetActiveEnv = true
+				res.ActiveEnv = firstEnv
+			} else {
+				res.ActiveEnv = cfg.ActiveEnv
+			}
 		}
-		if err := ensureDir(filepath.Dir(reqPath)); err != nil {
-			return InitResult{}, err
-		}
-		if err := os.WriteFile(reqPath, data, 0o644); err != nil {
-			return InitResult{}, err
-		}
-		res.CreatedReq = true
-	}
-
-	cfgPath := filepath.Join(base, "config.yaml")
-	cfg, err := loadConfigAt(cfgPath)
-	if err != nil {
-		return InitResult{}, err
-	}
-	if cfg.ActiveEnv == "" {
-		cfg.ActiveEnv = env.Name
-		if err := saveConfigAt(base, cfgPath, cfg); err != nil {
-			return InitResult{}, err
-		}
-		res.SetActiveEnv = true
-		res.ActiveEnv = env.Name
-	} else {
-		res.ActiveEnv = cfg.ActiveEnv
 	}
 
 	return res, nil
+}
+
+// githubContentItem is a single entry returned by the GitHub Contents API.
+type githubContentItem struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Type        string `json:"type"` // "file" or "dir"
+	DownloadURL string `json:"download_url"`
+}
+
+const githubExamplesBase = "https://api.github.com/repos/melvinsembrano/terman/contents/.terman"
+
+// fetchExamples downloads all files from the terman GitHub repository's
+// .terman directory (recursively) and writes them into base, mirroring the
+// directory structure under .terman/envs and .terman/requests. It skips
+// config.yaml and any file that already exists unless force is true. It
+// returns the list of relative paths written, the name of the first
+// environment file found (for setting as active), and any error.
+func fetchExamples(base string, force bool) (fetched []string, firstEnv string, err error) {
+	fetched, firstEnv, err = fetchExamplesDir(githubExamplesBase, base, "", force)
+	return
+}
+
+// fetchExamplesDir recursively fetches a GitHub Contents API directory.
+// apiURL is the full API URL for the directory; base is the local root;
+// relDir is the path relative to base represented by this directory.
+func fetchExamplesDir(apiURL, base, relDir string, force bool) (fetched []string, firstEnv string, err error) {
+	resp, err := http.Get(apiURL) //nolint:noctx
+	if err != nil {
+		return nil, "", fmt.Errorf("fetching examples index %s: %w", apiURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("fetching examples index %s: HTTP %d", apiURL, resp.StatusCode)
+	}
+
+	var items []githubContentItem
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, "", fmt.Errorf("decoding examples index: %w", err)
+	}
+
+	for _, item := range items {
+		itemRel := filepath.Join(relDir, item.Name)
+		switch item.Type {
+		case "dir":
+			subFetched, subFirst, err := fetchExamplesDir(
+				githubExamplesBase+"/"+item.Path[len(".terman/"):],
+				base, itemRel, force,
+			)
+			if err != nil {
+				return fetched, firstEnv, err
+			}
+			fetched = append(fetched, subFetched...)
+			if firstEnv == "" {
+				firstEnv = subFirst
+			}
+		case "file":
+			// Skip config.yaml — we manage active-env ourselves.
+			if item.Name == "config.yaml" {
+				continue
+			}
+			localPath := filepath.Join(base, itemRel)
+			if !force && fileExists(localPath) {
+				continue
+			}
+			if err := ensureDir(filepath.Dir(localPath)); err != nil {
+				return fetched, firstEnv, err
+			}
+			if err := downloadFile(item.DownloadURL, localPath); err != nil {
+				return fetched, firstEnv, err
+			}
+			fetched = append(fetched, itemRel)
+			// Track the first env file (envs/<name>.yaml) to set as active.
+			if firstEnv == "" && strings.HasPrefix(itemRel, "envs"+string(filepath.Separator)) {
+				name := strings.TrimSuffix(item.Name, ".yaml")
+				if name != "" {
+					firstEnv = name
+				}
+			}
+		}
+	}
+	return fetched, firstEnv, nil
+}
+
+// downloadFile fetches rawURL and writes the body to localPath.
+func downloadFile(rawURL, localPath string) error {
+	resp, err := http.Get(rawURL) //nolint:noctx
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("downloading %s: HTTP %d", rawURL, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", rawURL, err)
+	}
+	return os.WriteFile(localPath, data, 0o644)
 }

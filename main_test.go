@@ -721,7 +721,7 @@ func TestCmdVersion(t *testing.T) {
 	}
 }
 
-func TestCmdInitFreshCreatesSamplesAndPrintsSummary(t *testing.T) {
+func TestCmdInitFreshCreatesDirsAndPrintsSummary(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	cwd := chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
@@ -732,21 +732,19 @@ func TestCmdInitFreshCreatesSamplesAndPrintsSummary(t *testing.T) {
 		}
 	})
 
-	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs", "dev.yaml")); err != nil {
-		t.Errorf("expected envs/dev.yaml to exist: %v", err)
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "envs")); err != nil {
+		t.Errorf("expected envs/ dir to exist: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
-		t.Errorf("expected requests/hello-httpbin.yaml to exist: %v", err)
+	if _, err := os.Stat(filepath.Join(cwd, ".terman", "requests")); err != nil {
+		t.Errorf("expected requests/ dir to exist: %v", err)
 	}
-	for _, want := range []string{
-		"Initialized terman store in",
-		`Created environment "dev"`,
-		`Created request "Hello httpbin"`,
-		`Set active environment to "dev"`,
-		`terman run "Hello httpbin"`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("cmdInit output missing %q, got:\n%s", want, out)
+	if !strings.Contains(out, "Initialized terman store in") {
+		t.Errorf("cmdInit output missing init message, got:\n%s", out)
+	}
+	// No sample files should have been mentioned.
+	for _, notwant := range []string{`Created environment`, `Created request`} {
+		if strings.Contains(out, notwant) {
+			t.Errorf("cmdInit output should not contain %q without --examples, got:\n%s", notwant, out)
 		}
 	}
 }
@@ -767,17 +765,11 @@ func TestCmdInitRerunIsNoOp(t *testing.T) {
 		}
 	})
 
+	if !strings.Contains(out, "terman store already initialized in") {
+		t.Errorf("re-run output missing already-initialized message, got:\n%s", out)
+	}
 	if strings.Contains(out, "Created") {
 		t.Errorf("re-run output should not report anything created, got:\n%s", out)
-	}
-	for _, want := range []string{
-		"terman store already initialized in",
-		`Environment "dev" already exists, left unchanged`,
-		`Request "Hello httpbin" already exists, left unchanged`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("re-run output missing %q, got:\n%s", want, out)
-		}
 	}
 }
 
@@ -810,8 +802,8 @@ func TestCmdInitInSubdirCreatesItsOwnStore(t *testing.T) {
 		}
 	})
 
-	if _, err := os.Stat(filepath.Join(sub, ".terman", "requests", "hello-httpbin.yaml")); err != nil {
-		t.Errorf("expected a new .terman under %s, got: %v", sub, err)
+	if _, err := os.Stat(filepath.Join(sub, ".terman", "requests")); err != nil {
+		t.Errorf("expected a new .terman/requests/ under %s, got: %v", sub, err)
 	}
 }
 
@@ -824,32 +816,26 @@ func TestCmdInitRespectsXDGConfigHome(t *testing.T) {
 		t.Fatalf("cmdInit: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(xdg, "terman", "requests", "hello-httpbin.yaml")); err != nil {
-		t.Errorf("expected the sample request under $XDG_CONFIG_HOME/terman, got: %v", err)
+	if _, err := os.Stat(filepath.Join(xdg, "terman", "requests")); err != nil {
+		t.Errorf("expected requests/ dir under $XDG_CONFIG_HOME/terman, got: %v", err)
 	}
 }
 
-func TestCmdInitForceOverwritesEditedSample(t *testing.T) {
+func TestCmdInitForceIsNoOpWithoutExamples(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	chdirTemp(t)
 	t.Setenv("HOME", t.TempDir())
 
-	if err := cmdInit(nil); err != nil {
-		t.Fatalf("cmdInit (first): %v", err)
+	// --force without --examples should still just create dirs, nothing else.
+	out := captureStdout(t, func() {
+		if err := cmdInit([]string{"--force"}); err != nil {
+			t.Fatalf("cmdInit (force): %v", err)
+		}
+	})
+	if !strings.Contains(out, "Initialized terman store in") {
+		t.Errorf("force init output missing init message, got:\n%s", out)
 	}
-	if err := store.SaveRequest(model.Request{Name: "Hello httpbin", Method: "GET", URL: "https://changed.example.com"}, "Hello httpbin", ""); err != nil {
-		t.Fatalf("SaveRequest (edit): %v", err)
-	}
-
-	if err := cmdInit([]string{"--force"}); err != nil {
-		t.Fatalf("cmdInit (force): %v", err)
-	}
-
-	req, err := store.LoadRequest("Hello httpbin")
-	if err != nil {
-		t.Fatalf("LoadRequest: %v", err)
-	}
-	if req.URL != "{{base_url}}/get" {
-		t.Errorf("URL after --force = %q, want the default sample URL restored", req.URL)
+	if strings.Contains(out, "Created") {
+		t.Errorf("force init without --examples should not report created files, got:\n%s", out)
 	}
 }
