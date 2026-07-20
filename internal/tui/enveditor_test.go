@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -315,5 +316,319 @@ func TestEnvEditorClickIgnoredWhileModalOpen(t *testing.T) {
 	}
 	if s.selected != 0 {
 		t.Errorf("selected changed to %d, want unchanged 0", s.selected)
+	}
+}
+
+// ─────────────────────────────────────────────
+// Viewport scroll
+// ─────────────────────────────────────────────
+
+func TestEnvEditorScrollKeepsSelectionVisible(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.setSize(80, 20) // viewport height = 20-9 = 11
+
+	// Populate more rows than the viewport height.
+	for i := 0; i < 20; i++ {
+		s.pairs = append(s.pairs, kvPair{key: fmt.Sprintf("key_%02d", i), value: fmt.Sprintf("val_%d", i)})
+	}
+	s.section = envSectionRows
+	s.selected = 0
+
+	// Navigate down past the viewport bottom — YOffset should advance.
+	for s.selected < 15 {
+		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // no-op key first
+		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+
+	if s.selected != 15 {
+		t.Fatalf("selected = %d, want 15", s.selected)
+	}
+	// The selected row (15) must be within the viewport window.
+	if s.selected < s.rowOffset || s.selected >= s.rowOffset+s.vp.Height {
+		t.Errorf("selected=%d not in viewport window [%d, %d)",
+			s.selected, s.rowOffset, s.rowOffset+s.vp.Height)
+	}
+}
+
+func TestEnvEditorScrollKeepsSelectionVisibleGoingUp(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.setSize(80, 20)
+
+	for i := 0; i < 20; i++ {
+		s.pairs = append(s.pairs, kvPair{key: fmt.Sprintf("key_%02d", i), value: "v"})
+	}
+	s.section = envSectionRows
+	s.selected = 19
+	s.rowOffset = 15 // viewport shows rows 15..25 — row 0 is above it
+
+	// Navigate up all the way to the top.
+	for s.selected > 0 {
+		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+
+	if s.selected != 0 {
+		t.Fatalf("selected = %d, want 0", s.selected)
+	}
+	if s.rowOffset != 0 {
+		t.Errorf("rowOffset = %d, want 0 after scrolling back to top", s.rowOffset)
+	}
+}
+
+func TestEnvEditorClickWithViewportOffset(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.setSize(80, 20)
+
+	for i := 0; i < 20; i++ {
+		s.pairs = append(s.pairs, kvPair{key: fmt.Sprintf("key_%02d", i), value: "v"})
+	}
+	s.section = envSectionRows
+	// Scroll so the viewport shows rows starting at index 5.
+	s.rowOffset = 5
+
+	// Click on the first visible line in the viewport (terminal row = envRowsContentTop + 0).
+	// With rowOffset=5, that should select row 5.
+	handled := s.handleMouse(tea.MouseEvent{
+		Y:      envRowsContentTop,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	if !handled {
+		t.Fatal("expected click to be handled")
+	}
+	if s.selected != 5 {
+		t.Errorf("selected = %d, want 5 (rowOffset 5, click at viewport row 0)", s.selected)
+	}
+}
+
+// ─────────────────────────────────────────────
+// Filter
+// ─────────────────────────────────────────────
+
+func TestEnvEditorVisiblePairsNoFilter(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "alpha", value: "1"}, {key: "beta", value: "2"}}
+
+	visible := s.visiblePairs()
+	if len(visible) != 2 {
+		t.Errorf("visiblePairs with no filter = %d, want 2", len(visible))
+	}
+	if visible[0].idx != 0 || visible[1].idx != 1 {
+		t.Errorf("indices = %d/%d, want 0/1", visible[0].idx, visible[1].idx)
+	}
+}
+
+func TestEnvEditorVisiblePairsFilterByKey(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{
+		{key: "base_url", value: "https://example.com"},
+		{key: "auth_token", value: "secret"},
+		{key: "timeout", value: "30"},
+	}
+	s.filter.SetValue("auth")
+
+	visible := s.visiblePairs()
+	if len(visible) != 1 {
+		t.Fatalf("visiblePairs filtered by 'auth' = %d, want 1", len(visible))
+	}
+	if visible[0].pair.key != "auth_token" {
+		t.Errorf("visible pair key = %q, want auth_token", visible[0].pair.key)
+	}
+	if visible[0].idx != 1 {
+		t.Errorf("visible pair original index = %d, want 1", visible[0].idx)
+	}
+}
+
+func TestEnvEditorVisiblePairsFilterByValue(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{
+		{key: "base_url", value: "https://api.example.com"},
+		{key: "cdn_url", value: "https://cdn.example.com"},
+		{key: "timeout", value: "30"},
+	}
+	s.filter.SetValue("cdn")
+
+	visible := s.visiblePairs()
+	if len(visible) != 1 {
+		t.Fatalf("visiblePairs filtered by 'cdn' = %d, want 1", len(visible))
+	}
+	if visible[0].pair.key != "cdn_url" {
+		t.Errorf("visible[0].key = %q, want cdn_url", visible[0].pair.key)
+	}
+}
+
+func TestEnvEditorVisiblePairsFilterCaseInsensitive(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{
+		{key: "BASE_URL", value: "https://example.com"},
+		{key: "token", value: "abc"},
+	}
+	s.filter.SetValue("base")
+
+	visible := s.visiblePairs()
+	if len(visible) != 1 || visible[0].pair.key != "BASE_URL" {
+		t.Errorf("expected case-insensitive match on BASE_URL, got %+v", visible)
+	}
+}
+
+func TestEnvEditorVisiblePairsNoMatchReturnsEmpty(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "alpha", value: "1"}, {key: "beta", value: "2"}}
+	s.filter.SetValue("zzz")
+
+	visible := s.visiblePairs()
+	if len(visible) != 0 {
+		t.Errorf("expected 0 visible pairs for non-matching filter, got %d", len(visible))
+	}
+}
+
+func TestEnvEditorFilterKeyOpensFilterMode(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "a", value: "1"}}
+	s.section = envSectionRows
+
+	s, _ = s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if !s.filtering {
+		t.Error("expected filtering=true after pressing 'f'")
+	}
+}
+
+func TestEnvEditorFilterSlashKeyOpensFilterMode(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "a", value: "1"}}
+	s.section = envSectionRows
+
+	s, _ = s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !s.filtering {
+		t.Error("expected filtering=true after pressing '/'")
+	}
+}
+
+func TestEnvEditorFilterEscClearsFilter(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "base_url", value: "x"}, {key: "token", value: "y"}}
+	s.section = envSectionRows
+	s.filtering = true
+	s.filter.SetValue("base")
+	s.selected = 0
+
+	s, _ = s.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if s.filtering {
+		t.Error("filtering should be false after esc")
+	}
+	if s.filter.Value() != "" {
+		t.Errorf("filter value = %q, want empty after esc", s.filter.Value())
+	}
+	if len(s.visiblePairs()) != 2 {
+		t.Errorf("expected all pairs visible after clear, got %d", len(s.visiblePairs()))
+	}
+}
+
+func TestEnvEditorFilterEnterCommitsFilter(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{{key: "base_url", value: "x"}, {key: "token", value: "y"}}
+	s.section = envSectionRows
+	s.filtering = true
+	s.filter.SetValue("base")
+
+	s, _ = s.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if s.filtering {
+		t.Error("filtering should be false after enter")
+	}
+	// Filter value persists — rows should still be filtered.
+	if s.filter.Value() != "base" {
+		t.Errorf("filter value = %q, want 'base' still set after enter", s.filter.Value())
+	}
+	if len(s.visiblePairs()) != 1 {
+		t.Errorf("expected 1 visible pair after committing filter, got %d", len(s.visiblePairs()))
+	}
+}
+
+func TestEnvEditorFilterEditRowUsesVisibleIndex(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{
+		{key: "alpha", value: "1"},
+		{key: "beta", value: "2"},
+		{key: "gamma", value: "3"},
+	}
+	s.filter.SetValue("beta")
+	s.section = envSectionRows
+	s.selected = 0 // first (and only) visible row = "beta"
+
+	s.startEditRow()
+	if !s.editing {
+		t.Fatal("expected editing=true")
+	}
+	if s.keyInput.Value() != "beta" {
+		t.Errorf("keyInput = %q, want 'beta' (mapped through filter)", s.keyInput.Value())
+	}
+	// editIdx should be 1 (real index in s.pairs)
+	if s.editIdx != 1 {
+		t.Errorf("editIdx = %d, want 1", s.editIdx)
+	}
+}
+
+func TestEnvEditorFilterDeleteRowUsesVisibleIndex(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.pairs = []kvPair{
+		{key: "alpha", value: "1"},
+		{key: "beta", value: "2"},
+		{key: "gamma", value: "3"},
+	}
+	s.filter.SetValue("beta")
+	s.section = envSectionRows
+	s.selected = 0
+
+	s.deleteSelectedRow()
+
+	if len(s.pairs) != 2 {
+		t.Fatalf("pairs = %d after deleting filtered row, want 2", len(s.pairs))
+	}
+	for _, p := range s.pairs {
+		if p.key == "beta" {
+			t.Error("'beta' should have been deleted")
+		}
+	}
+}
+
+func TestEnvEditorFilterDoesNotDeleteOnSave(t *testing.T) {
+	// Filtering is view-only: saving while a filter is active must include
+	// ALL variables, not just the visible ones.
+	s := newEnvEditorScreen()
+	s.name.SetValue("dev")
+	s.pairs = []kvPair{
+		{key: "base_url", value: "https://example.com"},
+		{key: "token", value: "secret"},
+	}
+	s.filter.SetValue("base")
+
+	env := s.toEnvironment()
+	if len(env.Vars) != 2 {
+		t.Errorf("expected 2 vars in saved env (filter is view-only), got %d: %v", len(env.Vars), env.Vars)
+	}
+}
+
+func TestEnvEditorClickWithFilterBarAdjustsOffset(t *testing.T) {
+	s := newEnvEditorScreen()
+	s.setSize(80, 20)
+	s.pairs = []kvPair{
+		{key: "alpha", value: "1"},
+		{key: "beta", value: "2"},
+		{key: "gamma", value: "3"},
+	}
+	s.section = envSectionRows
+	s.filter.SetValue("a") // filter bar is visible (matches alpha + gamma)
+
+	// With filter bar shown, viewport top shifts down by 1.
+	// Click at envRowsContentTop+1 (one row below filter bar) → row 0.
+	handled := s.handleMouse(tea.MouseEvent{
+		Y:      envRowsContentTop + 1,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	if !handled {
+		t.Fatal("expected click to be handled")
+	}
+	if s.selected != 0 {
+		t.Errorf("selected = %d, want 0", s.selected)
 	}
 }
