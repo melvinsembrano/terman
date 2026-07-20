@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/melvinsembrano/terman/internal/httpx"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
+	"github.com/melvinsembrano/terman/internal/swagger"
 	"github.com/melvinsembrano/terman/internal/tui"
 	"github.com/melvinsembrano/terman/internal/vars"
 	"github.com/melvinsembrano/terman/internal/version"
@@ -78,6 +80,7 @@ Usage:
   terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
   terman import curl <name> [file]      Save a request parsed from a curl command
+  terman import swagger <file> [group] [flags]  Import requests from a Swagger/OpenAPI file
   terman version                        Show version information
   terman help                           Show this help
 
@@ -94,6 +97,15 @@ Flags for "run":
 "import curl" reads the curl command from <file> if given, otherwise from
 stdin (e.g. "pbpaste | terman import curl \"Get Users\"" or
 "pbpaste | terman import curl \"auth/Login\"" to save it into a folder).
+
+"import swagger" imports every path+method from a Swagger 2.x or OpenAPI 3.x
+file as individual requests. All variable parts (base URL, path/query params,
+request body top-level fields) are replaced with {{var}} placeholders so the
+same requests can be reused across environments. An environment holding those
+variable values is also created (or merged into if it already exists).
+
+Flags for "import swagger":
+  --env <name>   Environment name for extracted variables (default: group name)
 
 Data is stored in ./.terman if that directory (searched for in the current
 directory and its parents) already exists, otherwise in the legacy
@@ -393,11 +405,13 @@ func cmdEnv(args []string) error {
 
 func cmdImport(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terman import curl <name> [file]")
+		return fmt.Errorf("usage: terman import curl <name> [file]\n       terman import swagger <file> [group] [--env <name>]")
 	}
 	switch args[0] {
 	case "curl":
 		return cmdImportCurl(args[1:])
+	case "swagger":
+		return cmdImportSwagger(args[1:])
 	default:
 		return fmt.Errorf("unknown import subcommand %q", args[0])
 	}
@@ -443,6 +457,96 @@ func cmdImportCurl(args []string) error {
 		}
 	}
 	fmt.Println()
+	return nil
+}
+
+// cmdImportSwagger handles "terman import swagger <file> [group] [--env <name>]".
+//
+// It reads a Swagger 2.x or OpenAPI 3.x file (JSON or YAML), converts every
+// path+method into a terman Request with {{var}} placeholders, and merges the
+// extracted variable values into a named environment.
+//
+//	<file>   path to the swagger/openapi file
+//	[group]  optional request group name; defaults to the base name of the
+//	         file's directory (or filename stem when the file is in the cwd)
+//	--env    environment name (defaults to the group name)
+func cmdImportSwagger(args []string) error {
+	// Pre-scan for --env flag so it works regardless of position relative to
+	// positional args (Go's flag package stops at the first non-flag argument).
+	envName := ""
+	filtered := args[:0:0] // start fresh, same underlying array
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--env" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("--env requires a value")
+			}
+			envName = args[i+1]
+			i++ // skip value
+		} else if strings.HasPrefix(args[i], "--env=") {
+			envName = strings.TrimPrefix(args[i], "--env=")
+		} else {
+			filtered = append(filtered, args[i])
+		}
+	}
+	args = filtered
+
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terman import swagger <file> [group] [--env <name>]")
+	}
+	filePath := args[0]
+
+	// Determine the group name.
+	group := ""
+	if len(args) >= 2 {
+		group = args[1]
+	}
+	if group == "" {
+		// Default: base name of the file's containing directory.
+		dir := filepath.Dir(filePath)
+		base := filepath.Base(dir)
+		if base == "." || base == "/" {
+			// File is in the cwd — use the filename stem instead.
+			stem := filepath.Base(filePath)
+			stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+			base = stem
+		}
+		group = base
+	}
+
+	if envName == "" {
+		envName = group
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	result, err := swagger.Parse(data, filepath.Base(filePath), envName)
+	if err != nil {
+		return err
+	}
+
+	if len(result.Requests) == 0 {
+		fmt.Println("No requests found in the spec.")
+		return nil
+	}
+
+	// Save requests under the specified group.
+	for i := range result.Requests {
+		result.Requests[i].Group = group
+		if err := store.SaveRequest(result.Requests[i], "", ""); err != nil {
+			return fmt.Errorf("save request %q: %w", result.Requests[i].Name, err)
+		}
+	}
+
+	// Merge environment variables (upsert — same pattern as env import).
+	if err := upsertEnvVars(envName, result.Environment.Vars); err != nil {
+		return fmt.Errorf("save environment %q: %w", envName, err)
+	}
+
+	fmt.Printf("Imported %d request(s) into group %q, environment %q\n",
+		len(result.Requests), group, envName)
 	return nil
 }
 

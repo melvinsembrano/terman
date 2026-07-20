@@ -839,3 +839,173 @@ func TestCmdInitForceIsNoOpWithoutExamples(t *testing.T) {
 		t.Errorf("force init without --examples should not report created files, got:\n%s", out)
 	}
 }
+
+// ─────────────────────────────────────────────
+// import swagger
+// ─────────────────────────────────────────────
+
+const importSwaggerSpec = `
+openapi: "3.0.0"
+info:
+  title: Pet Store
+  version: "1.0"
+servers:
+  - url: https://petstore.example.com/api
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            example: "10"
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      parameters:
+        - name: petId
+          in: path
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+    delete:
+      operationId: deletePet
+      parameters:
+        - name: petId
+          in: path
+          schema:
+            type: string
+`
+
+func TestCmdImportSwagger_Basic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Write spec to a temp file under a directory named "petstore".
+	dir := t.TempDir()
+	specFile := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specFile, []byte(importSwaggerSpec), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdImportSwagger([]string{specFile}); err != nil {
+			t.Fatalf("cmdImportSwagger: %v", err)
+		}
+	})
+
+	// Output should report 3 imported requests.
+	if !strings.Contains(out, "3 request(s)") {
+		t.Errorf("output %q: expected '3 request(s)'", out)
+	}
+
+	// All requests should be stored and loadable.
+	reqs, err := store.LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	if len(reqs) != 3 {
+		t.Errorf("got %d saved requests, want 3", len(reqs))
+	}
+}
+
+func TestCmdImportSwagger_GroupFromArg(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	dir := t.TempDir()
+	specFile := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specFile, []byte(importSwaggerSpec), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdImportSwagger([]string{specFile, "mygroup"}); err != nil {
+			t.Fatalf("cmdImportSwagger: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, `"mygroup"`) {
+		t.Errorf("output %q: expected group name 'mygroup'", out)
+	}
+
+	reqs, err := store.LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	for _, r := range reqs {
+		if r.Group != "mygroup" {
+			t.Errorf("request %q has group %q, want %q", r.Name, r.Group, "mygroup")
+		}
+	}
+}
+
+func TestCmdImportSwagger_EnvVarsExtracted(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	dir := t.TempDir()
+	specFile := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specFile, []byte(importSwaggerSpec), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	if err := cmdImportSwagger([]string{specFile, "pets", "--env", "prod"}); err != nil {
+		t.Fatalf("cmdImportSwagger: %v", err)
+	}
+
+	env, err := store.LoadEnv("prod")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if env.Vars["base_url"] != "https://petstore.example.com/api" {
+		t.Errorf("base_url = %q, want https://petstore.example.com/api", env.Vars["base_url"])
+	}
+	if _, ok := env.Vars["pet_id"]; !ok {
+		t.Error("pet_id var not in environment")
+	}
+}
+
+func TestCmdImportSwagger_URLPlaceholders(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	dir := t.TempDir()
+	specFile := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specFile, []byte(importSwaggerSpec), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	if err := cmdImportSwagger([]string{specFile, "pets"}); err != nil {
+		t.Fatalf("cmdImportSwagger: %v", err)
+	}
+
+	reqs, err := store.LoadRequests()
+	if err != nil {
+		t.Fatalf("LoadRequests: %v", err)
+	}
+	for _, r := range reqs {
+		if !strings.HasPrefix(r.URL, "{{base_url}}") {
+			t.Errorf("request %q URL %q does not start with {{base_url}}", r.Name, r.URL)
+		}
+	}
+}
+
+func TestCmdImportSwagger_MissingFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	err := cmdImportSwagger([]string{"/nonexistent/path/spec.yaml"})
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+func TestCmdImportSwagger_NoArgs(t *testing.T) {
+	err := cmdImportSwagger([]string{})
+	if err == nil {
+		t.Error("expected error when no args provided")
+	}
+}
