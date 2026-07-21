@@ -893,3 +893,36 @@ func TestPressDDeletesFromCorrectGroup(t *testing.T) {
 		t.Errorf("expected request to be deleted")
 	}
 }
+
+func TestPressXOnRequestEnqueuesExportCmd(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	req := model.Request{Name: "Get Users", Method: "GET", URL: "https://example.com/users"}
+	if err := store.SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	_, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if cmd == nil {
+		t.Error("pressing 'x' on a request should return a non-nil tea.Cmd for the export")
+	}
+}
+
+func TestPressXWithNoSelectionIsNoop(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// No saved requests — nothing selected.
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	_, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if cmd != nil {
+		t.Error("pressing 'x' with no request selected should return nil Cmd")
+	}
+}

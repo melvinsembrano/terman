@@ -4,14 +4,26 @@ package tui
 
 import (
 	"strings"
+	"time"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/melvinsembrano/terman/internal/curl"
 	"github.com/melvinsembrano/terman/internal/model"
 	"github.com/melvinsembrano/terman/internal/store"
 	"github.com/melvinsembrano/terman/internal/version"
 )
 
 type screen int
+
+// listCurlCopiedMsg is sent after the curl command for a request has been
+// written to the clipboard, so the list title can be temporarily updated
+// to confirm the action.
+type listCurlCopiedMsg struct{ reqTitle string }
+
+// listTitleResetMsg is sent after a short delay to restore the list title
+// to its normal value following a "curl copied" confirmation.
+type listTitleResetMsg struct{}
 
 const (
 	screenList screen = iota
@@ -124,6 +136,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.DisableMouse
 		}
+	case listCurlCopiedMsg:
+		// Show a transient confirmation in the list title and schedule a
+		// reset so it reverts to the normal "Saved Requests" label.
+		m.list.setCurlCopiedTitle(msg.reqTitle)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return listTitleResetMsg{}
+		})
+	case listTitleResetMsg:
+		m.list.applyView()
+		return m, nil
 	}
 
 	switch m.screen {
@@ -180,6 +202,11 @@ func (m appModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "I":
 			m.curlImport.loadNew()
 			m.screen = screenCurlImport
+			return m, nil
+		case "x":
+			if req, ok := m.list.selected(); ok {
+				return m, exportCurlCmd(req, m.activeEnvVars())
+			}
 			return m, nil
 		case "enter":
 			if name, ok := m.list.selectedFolder(); ok {
@@ -493,6 +520,21 @@ func (m *appModel) removeSessionEnv(name string) {
 	}
 	if strings.EqualFold(m.activeEnv, name) {
 		m.activeEnv = ""
+	}
+}
+
+// exportCurlCmd builds the curl command for req with variables resolved,
+// writes it to the system clipboard, and returns a tea.Msg that carries
+// the result back to Update so the list title can be updated.
+func exportCurlCmd(req model.Request, v map[string]string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := curl.ToCurl(req, v)
+		if err := clipboard.WriteAll(cmd); err != nil {
+			// On error fall through silently; the user still has the
+			// request and can use the CLI instead.
+			return nil
+		}
+		return listCurlCopiedMsg{reqTitle: req.Name}
 	}
 }
 

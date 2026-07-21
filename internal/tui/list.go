@@ -21,6 +21,7 @@ func listHelpKeys() []key.Binding {
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "cycle env")),
 		key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "manage envs")),
+		key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "export curl")),
 		key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "import curl")),
 		key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle mouse")),
 	}
@@ -286,4 +287,10 @@ func (s *listScreen) handleMouse(msg tea.MouseEvent) bool {
 
 func (s listScreen) View() string {
 	return s.lst.View()
+}
+
+// setCurlCopiedTitle updates the list title to a transient confirmation
+// that the curl command for reqTitle was copied to the clipboard.
+func (s *listScreen) setCurlCopiedTitle(reqTitle string) {
+	s.lst.Title = "curl copied: " + reqTitle
 }

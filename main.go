@@ -46,6 +46,8 @@ func main() {
 		err = cmdEnv(args[1:])
 	case "import":
 		err = cmdImport(args[1:])
+	case "export":
+		err = cmdExport(args[1:])
 	case "version", "-v", "--version":
 		cmdVersion()
 		return
@@ -81,6 +83,7 @@ Usage:
   terman env use <name>                 Set the active environment
   terman import curl <name> [file]      Save a request parsed from a curl command
   terman import swagger <file> [group] [flags]  Import requests from a Swagger/OpenAPI file
+  terman export curl <name> [flags]     Export a saved request as a curl command
   terman version                        Show version information
   terman help                           Show this help
 
@@ -93,6 +96,11 @@ Flags for "run":
   --env-file <path>  Load extra variables from a .env file for this run only (not saved)
   --var k=v          Override/add a variable (repeatable)
   -i                 Also print response headers
+
+Flags for "export curl":
+  --env <name>       Use this environment instead of the active one for variable resolution
+  --env-file <path>  Load extra variables from a .env file for this export only (not saved)
+  --var k=v          Override/add a variable (repeatable)
 
 "import curl" reads the curl command from <file> if given, otherwise from
 stdin (e.g. "pbpaste | terman import curl \"Get Users\"" or
@@ -547,6 +555,75 @@ func cmdImportSwagger(args []string) error {
 
 	fmt.Printf("Imported %d request(s) into group %q, environment %q\n",
 		len(result.Requests), group, envName)
+	return nil
+}
+
+func cmdExport(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terman export curl <name> [flags]")
+	}
+	switch args[0] {
+	case "curl":
+		return cmdExportCurl(args[1:])
+	default:
+		return fmt.Errorf("unknown export subcommand %q", args[0])
+	}
+}
+
+// cmdExportCurl handles "terman export curl <name> [--env <name>] [--env-file <path>] [--var k=v]".
+// It loads the named request, resolves its variables against the active (or
+// specified) environment, and prints the resulting curl command to stdout.
+func cmdExportCurl(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terman export curl <name> [--env <name>] [--env-file <path>] [--var k=v]")
+	}
+	name := args[0]
+
+	fs := flag.NewFlagSet("export curl", flag.ContinueOnError)
+	envName := fs.String("env", "", "environment to use for variable resolution")
+	envFile := fs.String("env-file", "", "load additional variables from a .env file for this export only")
+	var varOverrides stringSlice
+	fs.Var(&varOverrides, "var", "override/add a variable, k=v (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	req, err := store.LoadRequest(name)
+	if err != nil {
+		return err
+	}
+
+	if *envName == "" {
+		*envName, err = store.GetActiveEnv()
+		if err != nil {
+			return err
+		}
+	}
+
+	envVars := map[string]string{}
+	if *envName != "" {
+		env, err := store.LoadEnv(*envName)
+		if err != nil {
+			return err
+		}
+		envVars = env.Vars
+	}
+
+	var fileVars map[string]string
+	if *envFile != "" {
+		fileVars, err = dotenv.ParseFile(*envFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	overrides, err := parseVarOverrides(varOverrides)
+	if err != nil {
+		return err
+	}
+
+	resolved := vars.Merge(envVars, fileVars, overrides)
+	fmt.Println(curl.ToCurl(req, resolved))
 	return nil
 }
 

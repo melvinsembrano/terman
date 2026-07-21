@@ -1009,3 +1009,123 @@ func TestCmdImportSwagger_NoArgs(t *testing.T) {
 		t.Error("expected error when no args provided")
 	}
 }
+
+func TestCmdExportCurlPrintsCommand(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	req := model.Request{
+		Name:   "Get User",
+		Method: "GET",
+		URL:    "https://example.com/users",
+		Headers: map[string]string{
+			"Accept": "application/json",
+		},
+	}
+	if err := store.SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdExportCurl([]string{"Get User"}); err != nil {
+			t.Fatalf("cmdExportCurl: %v", err)
+		}
+	})
+	if !strings.Contains(out, "curl -X GET") {
+		t.Errorf("output %q missing curl invocation", out)
+	}
+	if !strings.Contains(out, "https://example.com/users") {
+		t.Errorf("output %q missing URL", out)
+	}
+	if !strings.Contains(out, "Accept: application/json") {
+		t.Errorf("output %q missing Accept header", out)
+	}
+}
+
+func TestCmdExportCurlResolvesVars(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	req := model.Request{
+		Name:   "Get Users",
+		Method: "GET",
+		URL:    "{{base_url}}/users",
+	}
+	if err := store.SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	env := model.Environment{Name: "dev", Vars: map[string]string{"base_url": "https://api.example.com"}}
+	if err := store.SaveEnv(env, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := store.SetActiveEnv("dev"); err != nil {
+		t.Fatalf("SetActiveEnv: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdExportCurl([]string{"Get Users"}); err != nil {
+			t.Fatalf("cmdExportCurl: %v", err)
+		}
+	})
+	if !strings.Contains(out, "https://api.example.com/users") {
+		t.Errorf("output %q: expected resolved URL", out)
+	}
+}
+
+func TestCmdExportCurlVarOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	req := model.Request{
+		Name:   "Get Items",
+		Method: "GET",
+		URL:    "{{base_url}}/items",
+	}
+	if err := store.SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdExportCurl([]string{"Get Items", "--var", "base_url=https://override.example.com"}); err != nil {
+			t.Fatalf("cmdExportCurl: %v", err)
+		}
+	})
+	if !strings.Contains(out, "https://override.example.com/items") {
+		t.Errorf("output %q: expected overridden URL", out)
+	}
+}
+
+func TestCmdExportCurlNoArgs(t *testing.T) {
+	if err := cmdExportCurl([]string{}); err == nil {
+		t.Error("expected error when no name given")
+	}
+}
+
+func TestCmdExportCurlUnknownRequest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdExportCurl([]string{"nonexistent"}); err == nil {
+		t.Error("expected error for unknown request")
+	}
+}
+
+func TestCmdExportDispatchesCurl(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	req := model.Request{Name: "Ping", Method: "GET", URL: "https://example.com"}
+	if err := store.SaveRequest(req, "", ""); err != nil {
+		t.Fatalf("SaveRequest: %v", err)
+	}
+	out := captureStdout(t, func() {
+		if err := cmdExport([]string{"curl", "Ping"}); err != nil {
+			t.Fatalf("cmdExport: %v", err)
+		}
+	})
+	if !strings.Contains(out, "curl -X GET") {
+		t.Errorf("output %q missing curl invocation", out)
+	}
+}
+
+func TestCmdExportUnknownSubcommand(t *testing.T) {
+	if err := cmdExport([]string{"grpc"}); err == nil {
+		t.Error("expected error for unknown export subcommand")
+	}
+}
+
+func TestCmdExportNoArgs(t *testing.T) {
+	if err := cmdExport([]string{}); err == nil {
+		t.Error("expected error when no subcommand given")
+	}
+}
