@@ -77,12 +77,13 @@ func parseOAS2(raw map[string]interface{}, envName string) (Result, error) {
 	vars["base_url"] = baseURL
 
 	// Security → auth_token placeholder
-	if sec := raw["securityDefinitions"]; sec != nil {
+	hasGlobalSecurity := hasTopLevelSecurity(raw, "securityDefinitions")
+	if hasGlobalSecurity {
 		vars["auth_token"] = ""
 	}
 
 	paths, _ := raw["paths"].(map[string]interface{})
-	reqs, err := buildRequests(paths, vars, "2")
+	reqs, err := buildRequests(paths, vars, "2", hasGlobalSecurity)
 	if err != nil {
 		return Result{}, err
 	}
@@ -122,16 +123,13 @@ func parseOAS3(raw map[string]interface{}, envName string) (Result, error) {
 	vars["base_url"] = baseURL
 
 	// Security → auth_token placeholder
-	if raw["components"] != nil {
-		if comp, ok := raw["components"].(map[string]interface{}); ok {
-			if comp["securitySchemes"] != nil {
-				vars["auth_token"] = ""
-			}
-		}
+	hasGlobalSecurity := hasTopLevelSecurity(raw, "components")
+	if hasGlobalSecurity {
+		vars["auth_token"] = ""
 	}
 
 	paths, _ := raw["paths"].(map[string]interface{})
-	reqs, err := buildRequests(paths, vars, "3")
+	reqs, err := buildRequests(paths, vars, "3", hasGlobalSecurity)
 	if err != nil {
 		return Result{}, err
 	}
@@ -151,7 +149,9 @@ var httpMethods = []string{"get", "post", "put", "patch", "delete", "head", "opt
 // buildRequests iterates over all path+method combinations and builds
 // model.Request values. vars is mutated to accumulate discovered variable
 // names. specVersion is "2" or "3" (affects where request body lives).
-func buildRequests(paths map[string]interface{}, vars map[string]string, specVersion string) ([]model.Request, error) {
+// hasGlobalSecurity indicates that a top-level security requirement applies
+// to all operations unless overridden.
+func buildRequests(paths map[string]interface{}, vars map[string]string, specVersion string, hasGlobalSecurity bool) ([]model.Request, error) {
 	var reqs []model.Request
 
 	// Sort paths for deterministic output.
@@ -180,7 +180,7 @@ func buildRequests(paths map[string]interface{}, vars map[string]string, specVer
 				continue
 			}
 
-			req, err := buildRequest(path, method, op, pathLevelParams, vars, specVersion)
+			req, err := buildRequest(path, method, op, pathLevelParams, vars, specVersion, hasGlobalSecurity)
 			if err != nil {
 				return nil, err
 			}
@@ -191,12 +191,15 @@ func buildRequests(paths map[string]interface{}, vars map[string]string, specVer
 }
 
 // buildRequest constructs one model.Request from a single operation object.
+// hasGlobalSecurity indicates that a top-level security requirement applies
+// to all operations unless an operation explicitly opts out with security: [].
 func buildRequest(
 	path, method string,
 	op map[string]interface{},
 	pathLevelParams []interface{},
 	vars map[string]string,
 	specVersion string,
+	hasGlobalSecurity bool,
 ) (model.Request, error) {
 	// Request name: operationId or "METHOD /path"
 	name := stringField(op, "operationId")
@@ -250,8 +253,14 @@ func buildRequest(
 	// Headers
 	headers := map[string]string{}
 
-	// Security hint → Authorization header
-	if op["security"] != nil || op["x-security-scopes"] != nil {
+	// Security hint → Authorization header.
+	// Add the header if:
+	//   a) the operation has an explicit security requirement, OR
+	//   b) global security applies and the operation does NOT opt out with security: []
+	opSecurity, opHasSecurity := op["security"]
+	opSecurityIsEmpty := opHasSecurity && isEmptySecurityList(opSecurity)
+	if (op["x-security-scopes"] != nil || opHasSecurity && !opSecurityIsEmpty) ||
+		(hasGlobalSecurity && !opSecurityIsEmpty) {
 		headers["Authorization"] = "Bearer {{auth_token}}"
 	}
 
@@ -526,4 +535,33 @@ func exampleFromType(t string) string {
 	default:
 		return ""
 	}
+}
+
+// hasTopLevelSecurity returns true when either the top-level "security" array
+// is non-empty OR a security scheme registry ("securityDefinitions" for OAS2,
+// or "components" containing "securitySchemes" for OAS3) is present. The
+// schemesKey is "securityDefinitions" (OAS2) or "components" (OAS3).
+func hasTopLevelSecurity(raw map[string]interface{}, schemesKey string) bool {
+	// Top-level security array declared.
+	if sec, ok := raw["security"].([]interface{}); ok && len(sec) > 0 {
+		return true
+	}
+	// Security scheme registry present.
+	switch schemesKey {
+	case "securityDefinitions":
+		return raw["securityDefinitions"] != nil
+	case "components":
+		if comp, ok := raw["components"].(map[string]interface{}); ok {
+			return comp["securitySchemes"] != nil
+		}
+	}
+	return false
+}
+
+// isEmptySecurityList reports whether v is an empty security requirement list
+// (i.e. security: [] — the OpenAPI way for an operation to opt out of global
+// security).
+func isEmptySecurityList(v interface{}) bool {
+	list, ok := v.([]interface{})
+	return ok && len(list) == 0
 }

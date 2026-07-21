@@ -341,6 +341,120 @@ func TestParseJSON(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
+// Global security propagation
+// ─────────────────────────────────────────────
+
+// OAS3: top-level security array → every operation gets Authorization header.
+const oas3GlobalSecurityYAML = `
+openapi: "3.0.0"
+info:
+  title: Test API
+  version: "1.0"
+servers:
+  - url: https://api.example.com
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+security:
+  - BearerAuth: []
+paths:
+  /users:
+    get:
+      operationId: listUsers
+  /users/{userId}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: userId
+          in: path
+          schema:
+            type: string
+  /public:
+    get:
+      operationId: publicEndpoint
+      security: []
+`
+
+func TestParseOAS3_GlobalSecurityAddsAuthHeader(t *testing.T) {
+	res, err := swagger.Parse([]byte(oas3GlobalSecurityYAML), "spec.yaml", "env")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range res.Requests {
+		switch r.Name {
+		case "listUsers", "getUser":
+			if r.Headers["Authorization"] != "Bearer {{auth_token}}" {
+				t.Errorf("request %q: Authorization = %q, want \"Bearer {{auth_token}}\"", r.Name, r.Headers["Authorization"])
+			}
+		case "publicEndpoint":
+			if r.Headers["Authorization"] != "" {
+				t.Errorf("request %q: Authorization should be absent (security: []), got %q", r.Name, r.Headers["Authorization"])
+			}
+		}
+	}
+}
+
+func TestParseOAS3_GlobalSecuritySeedsAuthTokenVar(t *testing.T) {
+	res, err := swagger.Parse([]byte(oas3GlobalSecurityYAML), "spec.yaml", "env")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := res.Environment.Vars["auth_token"]; !ok {
+		t.Error("expected auth_token var when global security is set")
+	}
+}
+
+// OAS2: top-level security array → every operation gets Authorization header.
+const oas2GlobalSecurityYAML = `
+swagger: "2.0"
+host: api.example.com
+basePath: /v1
+securityDefinitions:
+  bearer:
+    type: apiKey
+    in: header
+    name: Authorization
+security:
+  - bearer: []
+paths:
+  /items:
+    get:
+      operationId: listItems
+  /items/{id}:
+    delete:
+      operationId: deleteItem
+      parameters:
+        - name: id
+          in: path
+          type: string
+  /open:
+    get:
+      operationId: openEndpoint
+      security: []
+`
+
+func TestParseOAS2_GlobalSecurityAddsAuthHeader(t *testing.T) {
+	res, err := swagger.Parse([]byte(oas2GlobalSecurityYAML), "spec.yaml", "env")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range res.Requests {
+		switch r.Name {
+		case "listItems", "deleteItem":
+			if r.Headers["Authorization"] != "Bearer {{auth_token}}" {
+				t.Errorf("request %q: Authorization = %q, want \"Bearer {{auth_token}}\"", r.Name, r.Headers["Authorization"])
+			}
+		case "openEndpoint":
+			if r.Headers["Authorization"] != "" {
+				t.Errorf("request %q: Authorization should be absent (security: []), got %q", r.Name, r.Headers["Authorization"])
+			}
+		}
+	}
+}
+
+// ─────────────────────────────────────────────
 // Error cases
 // ─────────────────────────────────────────────
 
