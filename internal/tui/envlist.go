@@ -14,6 +14,7 @@ func envListHelpKeys() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit")),
 		key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
+		key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clone")),
 		key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "load session env")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "set active")),

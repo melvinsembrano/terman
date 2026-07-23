@@ -309,6 +309,24 @@ func (m appModel) updateEnvList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
 			}
 			return m, nil
+		case "c":
+			if env, ok := m.envList.selected(); ok {
+				clonedName := store.CloneEnvName(m.envs, env.Name)
+				if m.isSessionEnv(env.Name) {
+					// Session clone: copy vars in memory, never touch disk.
+					vars := make(map[string]string, len(env.Vars))
+					for k, v := range env.Vars {
+						vars[k] = v
+					}
+					m.addSessionEnv(model.Environment{Name: clonedName, Vars: vars})
+				} else {
+					if _, err := store.CloneEnv(env.Name, clonedName); err == nil {
+						_ = m.reloadEnvs()
+					}
+				}
+				m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
+			}
+			return m, nil
 		}
 	}
 	var cmd tea.Cmd

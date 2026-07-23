@@ -926,3 +926,101 @@ func TestPressXWithNoSelectionIsNoop(t *testing.T) {
 		t.Error("pressing 'x' with no request selected should return nil Cmd")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// env clone (TUI)
+// ---------------------------------------------------------------------------
+
+func TestPressCClonesPersistedEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	env := model.Environment{Name: "prod", Vars: map[string]string{"url": "https://prod.example.com"}}
+	if err := store.SaveEnv(env, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	_ = m.reloadEnvs()
+	m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	am := updated.(appModel)
+
+	// The clone should appear in m.envs.
+	var found bool
+	for _, e := range am.envs {
+		if e.Name == "prod copy" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		names := make([]string, len(am.envs))
+		for i, e := range am.envs {
+			names[i] = e.Name
+		}
+		t.Errorf("clone %q not found in envs: %v", "prod copy", names)
+	}
+}
+
+func TestPressCClonesSessionEnvAsSession(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+
+	// Add a session-only environment.
+	sessionEnv := model.Environment{Name: "local", Vars: map[string]string{"host": "localhost"}}
+	m.addSessionEnv(sessionEnv)
+	m.envList.refresh(m.envs, m.activeEnv, m.sessionEnvs)
+	m.screen = screenEnvList
+
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	am := updated.(appModel)
+
+	// The clone must exist in m.envs and must itself be a session env.
+	var cloneEnv *model.Environment
+	for i, e := range am.envs {
+		if e.Name == "local copy" {
+			cloneEnv = &am.envs[i]
+			break
+		}
+	}
+	if cloneEnv == nil {
+		t.Fatalf("clone %q not found in envs", "local copy")
+	}
+	if !am.isSessionEnv("local copy") {
+		t.Error("clone of a session env should itself be a session env")
+	}
+	if cloneEnv.Vars["host"] != "localhost" {
+		t.Errorf("clone.Vars[host] = %q, want %q", cloneEnv.Vars["host"], "localhost")
+	}
+
+	// Confirm the clone was NOT persisted to disk.
+	if _, err := store.LoadEnv("local copy"); err == nil {
+		t.Error("session-env clone should not have been written to disk")
+	}
+}
+
+func TestPressCWithNoEnvSelectedIsNoop(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// No environments saved — list is empty, nothing selected.
+	m, err := newAppModel()
+	if err != nil {
+		t.Fatalf("newAppModel: %v", err)
+	}
+	m.screen = screenEnvList
+
+	before := len(m.envs)
+	updated, _ := m.updateEnvList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	am := updated.(appModel)
+	if len(am.envs) != before {
+		t.Errorf("pressing 'c' with no selection should not change envs (got %d, want %d)", len(am.envs), before)
+	}
+}

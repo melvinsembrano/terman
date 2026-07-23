@@ -459,6 +459,75 @@ func SaveEnv(e model.Environment, prevName string) error {
 	return nil
 }
 
+// CloneEnvName returns a non-colliding name for a clone of an environment
+// named base, given the set of all existing environment names. The first
+// candidate is "<base> copy"; if that is taken it tries "<base> copy 2",
+// "<base> copy 3", and so on. Collision detection is case-insensitive.
+//
+// If base itself ends in " copy" or " copy <N>", those suffixes are
+// stripped before appending a fresh " copy" so that cloning a clone
+// does not produce names like "foo copy copy".
+func CloneEnvName(existing []model.Environment, base string) string {
+	// Strip any existing " copy" / " copy N" suffix from base.
+	stripped := base
+	if idx := strings.LastIndex(base, " copy"); idx >= 0 {
+		tail := base[idx+5:] // everything after " copy"
+		if tail == "" || isDigitString(strings.TrimSpace(tail)) {
+			stripped = base[:idx]
+		}
+	}
+
+	taken := make(map[string]bool, len(existing))
+	for _, e := range existing {
+		taken[strings.ToLower(e.Name)] = true
+	}
+
+	candidate := stripped + " copy"
+	if !taken[strings.ToLower(candidate)] {
+		return candidate
+	}
+	for n := 2; ; n++ {
+		candidate = fmt.Sprintf("%s copy %d", stripped, n)
+		if !taken[strings.ToLower(candidate)] {
+			return candidate
+		}
+	}
+}
+
+// isDigitString reports whether s consists entirely of ASCII decimal digits.
+func isDigitString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// CloneEnv loads the environment named sourceName, copies its variables into
+// a new environment named clonedName, saves it to disk, and returns the new
+// environment. The source must already exist; clonedName must be non-empty.
+func CloneEnv(sourceName, clonedName string) (model.Environment, error) {
+	src, err := LoadEnv(sourceName)
+	if err != nil {
+		return model.Environment{}, fmt.Errorf("clone env: %w", err)
+	}
+	clone := model.Environment{Name: clonedName}
+	if len(src.Vars) > 0 {
+		clone.Vars = make(map[string]string, len(src.Vars))
+		for k, v := range src.Vars {
+			clone.Vars[k] = v
+		}
+	}
+	if err := SaveEnv(clone, ""); err != nil {
+		return model.Environment{}, fmt.Errorf("clone env: %w", err)
+	}
+	return clone, nil
+}
+
 // DeleteEnv removes the saved environment with the given name.
 func DeleteEnv(name string) error {
 	dir, err := EnvsDir()

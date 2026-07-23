@@ -81,6 +81,7 @@ Usage:
   terman env unset <name> <key>...      Remove variables from an environment
   terman env delete <name>              Delete an environment
   terman env use <name>                 Set the active environment
+  terman env clone <source> <new-name>  Clone an environment
   terman import curl <name> [file]      Save a request parsed from a curl command
   terman import swagger <file> [group] [flags]  Import requests from a Swagger/OpenAPI file
   terman export curl <name> [flags]     Export a saved request as a curl command
@@ -305,7 +306,7 @@ func cmdList(args []string) error {
 
 func cmdEnv(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terman env list|show|set|unset|delete|use ...")
+		return fmt.Errorf("usage: terman env list|show|set|unset|delete|use|clone ...")
 	}
 	switch args[0] {
 	case "list":
@@ -406,6 +407,17 @@ func cmdEnv(args []string) error {
 			return err
 		}
 		return store.SetActiveEnv(args[1])
+	case "clone":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: terman env clone <source> <new-name>")
+		}
+		source, newName := args[1], args[2]
+		clone, err := store.CloneEnv(source, newName)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Cloned %q → %q (%d variable(s))\n", source, clone.Name, len(clone.Vars))
+		return nil
 	default:
 		return fmt.Errorf("unknown env subcommand %q", args[0])
 	}

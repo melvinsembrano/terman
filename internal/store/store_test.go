@@ -675,3 +675,165 @@ func TestInitForceOverwritesEditedSamples(t *testing.T) {
 		t.Errorf("Init(force=true, examples=false) = %+v, want no samples written", res)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CloneEnvName
+// ---------------------------------------------------------------------------
+
+func TestCloneEnvNameBasicSuffix(t *testing.T) {
+	existing := []model.Environment{{Name: "prod"}}
+	got := CloneEnvName(existing, "prod")
+	if got != "prod copy" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "prod copy")
+	}
+}
+
+func TestCloneEnvNameCollisionIncrementsN(t *testing.T) {
+	existing := []model.Environment{
+		{Name: "prod"},
+		{Name: "prod copy"},
+	}
+	got := CloneEnvName(existing, "prod")
+	if got != "prod copy 2" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "prod copy 2")
+	}
+}
+
+func TestCloneEnvNameMultipleCollisions(t *testing.T) {
+	existing := []model.Environment{
+		{Name: "staging"},
+		{Name: "staging copy"},
+		{Name: "staging copy 2"},
+		{Name: "staging copy 3"},
+	}
+	got := CloneEnvName(existing, "staging")
+	if got != "staging copy 4" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "staging copy 4")
+	}
+}
+
+func TestCloneEnvNameCloningACopyStripsOldSuffix(t *testing.T) {
+	// Cloning "prod copy" should produce "prod copy" (not "prod copy copy").
+	existing := []model.Environment{{Name: "prod copy"}}
+	got := CloneEnvName(existing, "prod copy")
+	// "prod copy" is taken, so the next candidate is "prod copy 2".
+	if got != "prod copy 2" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "prod copy 2")
+	}
+}
+
+func TestCloneEnvNameCloningANumberedCopyStripsOldSuffix(t *testing.T) {
+	// Cloning "prod copy 3" should try "prod copy", not "prod copy 3 copy".
+	existing := []model.Environment{{Name: "prod copy 3"}}
+	got := CloneEnvName(existing, "prod copy 3")
+	if got != "prod copy" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "prod copy")
+	}
+}
+
+func TestCloneEnvNameCaseInsensitiveCollision(t *testing.T) {
+	existing := []model.Environment{{Name: "Prod Copy"}}
+	got := CloneEnvName(existing, "prod")
+	// "prod copy" collides with "Prod Copy" (case-insensitive).
+	if got != "prod copy 2" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "prod copy 2")
+	}
+}
+
+func TestCloneEnvNameEmptyExisting(t *testing.T) {
+	got := CloneEnvName(nil, "dev")
+	if got != "dev copy" {
+		t.Errorf("CloneEnvName = %q, want %q", got, "dev copy")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CloneEnv
+// ---------------------------------------------------------------------------
+
+func TestCloneEnvCopiesVars(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	src := model.Environment{Name: "prod", Vars: map[string]string{"url": "https://prod.example.com", "token": "abc"}}
+	if err := SaveEnv(src, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	clone, err := CloneEnv("prod", "prod copy")
+	if err != nil {
+		t.Fatalf("CloneEnv: %v", err)
+	}
+	if clone.Name != "prod copy" {
+		t.Errorf("clone.Name = %q, want %q", clone.Name, "prod copy")
+	}
+	if clone.Vars["url"] != "https://prod.example.com" {
+		t.Errorf("clone.Vars[url] = %q, want %q", clone.Vars["url"], "https://prod.example.com")
+	}
+	if clone.Vars["token"] != "abc" {
+		t.Errorf("clone.Vars[token] = %q, want %q", clone.Vars["token"], "abc")
+	}
+}
+
+func TestCloneEnvPersistsToDisk(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveEnv(model.Environment{Name: "staging", Vars: map[string]string{"k": "v"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if _, err := CloneEnv("staging", "staging copy"); err != nil {
+		t.Fatalf("CloneEnv: %v", err)
+	}
+
+	loaded, err := LoadEnv("staging copy")
+	if err != nil {
+		t.Fatalf("LoadEnv after clone: %v", err)
+	}
+	if loaded.Vars["k"] != "v" {
+		t.Errorf("loaded.Vars[k] = %q, want %q", loaded.Vars["k"], "v")
+	}
+}
+
+func TestCloneEnvDoesNotShareMap(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveEnv(model.Environment{Name: "base", Vars: map[string]string{"x": "1"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	clone, err := CloneEnv("base", "base copy")
+	if err != nil {
+		t.Fatalf("CloneEnv: %v", err)
+	}
+	// Mutate the clone's map in memory — should not affect a freshly loaded original.
+	clone.Vars["x"] = "mutated"
+
+	orig, err := LoadEnv("base")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if orig.Vars["x"] != "1" {
+		t.Errorf("orig.Vars[x] = %q after clone mutation, want %q", orig.Vars["x"], "1")
+	}
+}
+
+func TestCloneEnvSourceNotFound(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if _, err := CloneEnv("nonexistent", "copy"); err == nil {
+		t.Error("expected error when source env does not exist")
+	}
+}
+
+func TestCloneEnvNoVars(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveEnv(model.Environment{Name: "empty"}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	clone, err := CloneEnv("empty", "empty copy")
+	if err != nil {
+		t.Fatalf("CloneEnv: %v", err)
+	}
+	if len(clone.Vars) != 0 {
+		t.Errorf("clone.Vars = %v, want empty", clone.Vars)
+	}
+}

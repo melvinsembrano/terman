@@ -1129,3 +1129,79 @@ func TestCmdExportNoArgs(t *testing.T) {
 		t.Error("expected error when no subcommand given")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// env clone
+// ---------------------------------------------------------------------------
+
+func TestCmdEnvClonePrintsConfirmation(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "prod", Vars: map[string]string{"url": "https://prod.example.com"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdEnv([]string{"clone", "prod", "prod-backup"}); err != nil {
+			t.Fatalf("cmdEnv clone: %v", err)
+		}
+	})
+	if !strings.Contains(out, "prod") || !strings.Contains(out, "prod-backup") {
+		t.Errorf("output %q should mention both source and clone name", out)
+	}
+}
+
+func TestCmdEnvCloneCopiesVars(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "dev", Vars: map[string]string{"token": "abc", "url": "https://dev.example.com"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+
+	if err := cmdEnv([]string{"clone", "dev", "dev-copy"}); err != nil {
+		t.Fatalf("cmdEnv clone: %v", err)
+	}
+
+	cloned, err := store.LoadEnv("dev-copy")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if cloned.Vars["token"] != "abc" || cloned.Vars["url"] != "https://dev.example.com" {
+		t.Errorf("cloned vars = %v, want same as source", cloned.Vars)
+	}
+}
+
+func TestCmdEnvCloneSourceUnchanged(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := store.SaveEnv(model.Environment{Name: "staging", Vars: map[string]string{"x": "1"}}, ""); err != nil {
+		t.Fatalf("SaveEnv: %v", err)
+	}
+	if err := cmdEnv([]string{"clone", "staging", "staging copy"}); err != nil {
+		t.Fatalf("cmdEnv clone: %v", err)
+	}
+
+	orig, err := store.LoadEnv("staging")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if orig.Vars["x"] != "1" {
+		t.Errorf("source env mutated: Vars[x] = %q, want %q", orig.Vars["x"], "1")
+	}
+}
+
+func TestCmdEnvCloneNoArgs(t *testing.T) {
+	if err := cmdEnv([]string{"clone"}); err == nil {
+		t.Error("expected error when no args given to clone")
+	}
+}
+
+func TestCmdEnvCloneMissingNewName(t *testing.T) {
+	if err := cmdEnv([]string{"clone", "prod"}); err == nil {
+		t.Error("expected error when new-name is missing")
+	}
+}
+
+func TestCmdEnvCloneSourceNotFound(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := cmdEnv([]string{"clone", "nonexistent", "copy"}); err == nil {
+		t.Error("expected error when source environment does not exist")
+	}
+}
