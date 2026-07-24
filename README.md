@@ -41,9 +41,14 @@ terman run "Hello httpbin"
 ```
 
 It's safe to run again later: `init` only fills in whatever's missing and
-never overwrites an existing request or environment (pass `--force` to
-reset the sample back to its defaults). See "Storage" below for exactly
-where `.terman` ends up and how that's decided.
+never overwrites an existing request or environment. Two optional flags:
+
+- `--force` — overwrite the sample files back to their defaults.
+- `--examples` — fetch a richer set of example requests and environments
+  from the terman GitHub repository (requires a network connection).
+
+See "Storage" below for exactly where `.terman` ends up and how that's
+decided.
 
 ## Install
 
@@ -127,6 +132,7 @@ terman
 | `d`      | delete the selected request    |
 | `E`      | cycle the active environment   |
 | `v`      | manage environments            |
+| `x`      | export selected request as a curl command (copies to clipboard) |
 | `I`      | import a request from a curl command |
 | `ctrl+t` | toggle mouse capture            |
 | `/`      | search — matches name, method, URL, and folder across *every* folder, not just the one you're browsing |
@@ -158,6 +164,15 @@ click moves a line cursor, `enter`/`space` folds or unfolds the
 object/array under it (collapsed containers show as `{…3}`/`[…5]`).
 Non-JSON bodies stay plain scrollable text. `pgup`/`pgdn` and the mouse
 wheel scroll either way; `esc` goes back.
+
+| Key             | Action                                                        |
+|-----------------|---------------------------------------------------------------|
+| `↑`/`↓`         | move JSON tree cursor (JSON bodies only)                      |
+| `enter`/`space` | fold/unfold object or array at cursor (JSON bodies only)      |
+| `pgup`/`pgdn`   | scroll the viewport                                           |
+| `c`             | copy the response body to the clipboard (pretty-printed if JSON) |
+| `e`             | open the response body in `$VISUAL`/`$EDITOR`/vi as a temp file |
+| `esc`           | back to the request list                                      |
 
 ### Mouse support
 
@@ -195,6 +210,7 @@ Press `v` from the request list to open the environment manager:
 |-----------|-----------------------------------|
 | `enter`/`e` | edit the selected environment (persisted environments only) |
 | `n`       | new environment                  |
+| `c`       | clone the selected environment (produces `"<name> copy"`, `"<name> copy 2"`, etc.) |
 | `L`       | load a **session-only** environment (see below) |
 | `d`       | delete the selected environment  |
 | `u`       | set the selected environment active |
@@ -211,6 +227,7 @@ Press `v` from the request list to open the environment manager:
 | `i`             | import variables from a `.env` file (merges into the rows above) |
 | `enter`         | edit the selected variable           |
 | `d`             | delete the selected variable          |
+| `f`/`/`         | filter/search the variable list (type to narrow; `enter`/`tab` to commit, `esc` to clear) |
 | `ctrl+s`        | save                                  |
 | `esc`           | cancel (or close whichever modal is open, if any) |
 
@@ -230,7 +247,7 @@ permanent saved environment.
 ## CLI
 
 ```sh
-terman init [--force]                # set up .terman here with a sample request + env
+terman init [--force] [--examples]   # set up .terman here with a sample request + env
 
 terman list                          # list saved requests (as group/name paths)
 terman run <name> [flags]            # run a saved request
@@ -242,8 +259,10 @@ terman env import <file> <name>      # merge a .env file's variables into an env
 terman env unset <name> <key>...     # remove variables
 terman env delete <name>             # delete an environment
 terman env use <name>                # set the active environment
+terman env clone <source> <new-name> # duplicate an environment
 
 terman import curl <name> [file]     # save a request parsed from a curl command
+terman import swagger <file> [group] # import requests from a Swagger/OpenAPI file
 
 terman version                       # print the version (also shown in the TUI header)
 ```
@@ -273,6 +292,14 @@ Exit code is non-zero if the request errors or the response status is not
 
 Deleting the currently active environment (`env delete`) resets the active
 environment to "none".
+
+`env clone <source> <new-name>` duplicates an environment — all its
+variables are copied into a new environment under `<new-name>`. The source
+is not modified. In the TUI, press `c` from the environment list to do the
+same thing; the clone name is derived automatically as `"<name> copy"`,
+`"<name> copy 2"`, and so on (incrementing until it doesn't collide).
+Cloning a session-only environment produces another session-only
+environment that is equally never written to disk.
 
 ### Organizing requests into folders
 
@@ -331,6 +358,31 @@ HTTP client already negotiates and transparently decompresses gzip by
 default, so translating it into a header would actually break that); file
 uploads (`-F`/`--form`, `@file` data); ANSI-C `$'...'` quoting.
 
+### Importing from Swagger / OpenAPI
+
+`terman import swagger <file> [group] [--env <name>]` reads a Swagger 2.x
+or OpenAPI 3.x file (JSON or YAML) and converts every path + method
+combination into a saved request:
+
+```sh
+terman import swagger openapi.yaml
+terman import swagger openapi.yaml myapi          # save into the "myapi" folder
+terman import swagger openapi.yaml myapi --env myapi-dev
+```
+
+All variable parts of the spec are replaced with `{{var}}` placeholders —
+the base URL becomes `{{base_url}}`, path parameters become `{{param}}`,
+query parameters and top-level request body fields get their own
+placeholders too. terman simultaneously creates (or merges into) a named
+environment that holds those variable values extracted from the spec, so
+the requests are immediately runnable after import.
+
+- `[group]` — folder to file the requests under; defaults to the base name
+  of the directory containing the spec file (or the file's stem if it sits
+  in the current directory).
+- `--env <name>` — name for the generated/updated environment; defaults to
+  the group name.
+
 ### Loading `.env` files
 
 Two ways to bring in variables from a dotenv-style file (`.env`,
@@ -348,6 +400,27 @@ Two ways to bring in variables from a dotenv-style file (`.env`,
 `.env` file format: `KEY=VALUE` per line, blank lines and `#` comments
 ignored, an optional `export ` prefix, and values may be single- or
 double-quoted (double-quoted values support `\n`, `\t`, `\"`, `\\` escapes).
+
+### Exporting to curl
+
+`terman export curl <name> [flags]` prints the selected request as a
+ready-to-paste curl command, with environment variables resolved:
+
+```sh
+terman export curl auth/login
+terman export curl auth/login --env staging
+terman export curl auth/login --env-file .env.local --var token=override
+```
+
+The same flags as `run` apply for variable resolution (`--env`, `--env-file`,
+`--var`). The generated command uses single-quoted arguments with correct
+shell escaping, and headers are printed in sorted order for consistent
+output.
+
+In the TUI, press `x` from the request list to copy the curl command for
+the selected request to the clipboard (using the active environment for
+variable resolution). The list title briefly shows `curl copied: <name>`
+as confirmation.
 
 ## Storage
 
